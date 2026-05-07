@@ -88,3 +88,21 @@ class EvalResult(Base):
     tool_calls_json = Column(JSONB, nullable=True)
     final_answer = Column(Text, nullable=True)
     timestamp = Column(TIMESTAMPTZ, default=datetime.utcnow)
+
+
+class ChunkRelation(Base):
+    __tablename__ = "chunk_relations"
+    source_chunk_id = Column(UUID(as_uuid=True), primary_key=True)
+    target_chunk_id = Column(UUID(as_uuid=True), primary_key=True)
+    relation_type = Column(String(50), nullable=True)
+
+
+class PolicyViolationModel(Base):
+    __tablename__ = "policy_violations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), nullable=True)
+    agent_id = Column(String(50), nullable=True)
+    violation_type = Column(String(50), nullable=True)
+    details = Column(Text, nullable=True)
+    tokens_over_budget = Column(Integer, nullable=True)
+    timestamp = Column(TIMESTAMPTZ, default=datetime.utcnow)

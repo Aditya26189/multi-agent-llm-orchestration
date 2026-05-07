@@ -220,4 +220,23 @@ async def _save_context_to_db(context: SharedContext) -> None:
             except Exception:
                 continue
 
+        # Insert policy violations
+        for v in context.violations:
+            try:
+                await db.execute(text("""
+                    INSERT INTO policy_violations
+                    (id, job_id, agent_id, violation_type, details, tokens_over_budget, timestamp)
+                    VALUES (:id, :jid, :aid, :vt, :det, :tob, :ts)
+                """), {
+                    "id": v.violation_id,
+                    "jid": context.job_id,
+                    "aid": v.agent_id,
+                    "vt": v.violation_type,
+                    "det": v.details,
+                    "tob": v.tokens_over_budget,
+                    "ts": v.timestamp,
+                })
+            except Exception:
+                continue
+
         await db.commit()

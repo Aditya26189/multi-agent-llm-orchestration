@@ -385,6 +385,20 @@ async def execute_tool_with_retry(
         context.tool_calls.append(record)
 
         if result.success:
+            # RoMA ParseData: basic LLM extraction/validation of tool output to catch indirect injections
+            import json
+            out_str = json.dumps(result.data)
+            if "ignore all previous instructions" in out_str.lower() or "jailbreak" in out_str.lower():
+                from core.context import PolicyViolation
+                context.violations.append(PolicyViolation(
+                    agent_id="tool_runner",
+                    violation_type="injection_detected",
+                    details=f"Indirect injection detected in tool '{tool_name}' output."
+                ))
+                record.accepted = False
+                return ToolResult(
+                    success=False, error_code="EXEC_ERROR", error_message="Injection detected in output", tool_name=tool_name
+                )
             record.accepted = True
             return result
 

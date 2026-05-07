@@ -145,8 +145,34 @@ def upgrade() -> None:
     """)
     op.execute("CREATE INDEX IF NOT EXISTS idx_rewrites_status ON prompt_rewrites(status)")
 
+    # chunk_relations: Vector Graph RAG traversal
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS chunk_relations (
+            source_chunk_id UUID REFERENCES document_chunks(id) ON DELETE CASCADE,
+            target_chunk_id UUID REFERENCES document_chunks(id) ON DELETE CASCADE,
+            relation_type   VARCHAR(50),
+            PRIMARY KEY (source_chunk_id, target_chunk_id)
+        )
+    """)
+
+    # GIN on tool_calls input_json
+    op.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_json ON tool_calls USING GIN (input_json)")
+
+    # Policy violations audit
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS policy_violations (
+            id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            job_id          UUID REFERENCES jobs(job_id),
+            agent_id        VARCHAR(50),
+            violation_type  VARCHAR(50),
+            details         TEXT,
+            tokens_over_budget INT,
+            timestamp       TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+
 
 def downgrade() -> None:
-    for table in ["prompt_rewrites", "eval_results", "eval_runs",
+    for table in ["policy_violations", "chunk_relations", "prompt_rewrites", "eval_results", "eval_runs",
                   "tool_calls", "execution_events", "jobs", "document_chunks"]:
         op.execute(f"DROP TABLE IF EXISTS {table} CASCADE")

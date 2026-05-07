@@ -27,6 +27,10 @@ DRAFT ANSWER (pre-synthesis):
 SOURCE CHUNKS (ground truth):
 {chunks}
 
+CRITICAL: Before evaluating the main answer, identify ALL factual premises embedded in the original query.
+If any premise is demonstrably false, flag it with confidence=0.0 and flag_reason='false_premise: [correct fact]'.
+The system MUST NOT answer the original question while accepting a false premise.
+
 Critique ALL THREE sections above. For each problematic text span:
 - Extract the EXACT span
 - Assign confidence 0.0-1.0 (1.0 = fully supported)
