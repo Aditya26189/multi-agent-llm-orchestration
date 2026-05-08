@@ -1,5 +1,6 @@
 from sqlalchemy import Column, String, Float, Integer, Boolean, Text, BigInteger
-from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMPTZ
+from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMP
+TIMESTAMPTZ = TIMESTAMP(timezone=True)
 from sqlalchemy.orm import DeclarativeBase
 from datetime import datetime
 import uuid

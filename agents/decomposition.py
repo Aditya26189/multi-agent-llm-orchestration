@@ -107,7 +107,11 @@ class DecompositionAgent(BaseAgent):
 
 
 class DependencyExecutor:
-    """Execute sub-tasks in dependency order using asyncio.Event gates."""
+    """Execute sub-tasks in dependency order using asyncio.Event gates.
+
+    Cycle detection runs a DFS BEFORE execution and raises ValueError
+    to prevent deadlocks on circular dependencies (Section 7, Differentiator #13).
+    """
 
     def __init__(self, sub_tasks: List[SubTask]):
         self.tasks: Dict[str, SubTask] = {t.id: t for t in sub_tasks}
@@ -115,6 +119,36 @@ class DependencyExecutor:
             t_id: asyncio.Event() for t_id in self.tasks
         }
         self._failed: Set[str] = set()
+        self._detect_cycles()  # Raises ValueError if circular dep found
+
+    def _detect_cycles(self) -> None:
+        """DFS-based cycle detection. Raises ValueError on circular dependency."""
+        visited: Set[str] = set()
+        rec_stack: Set[str] = set()
+
+        def dfs(node_id: str) -> bool:
+            visited.add(node_id)
+            rec_stack.add(node_id)
+            task = self.tasks.get(node_id)
+            if task:
+                for dep_id in task.deps:
+                    if dep_id not in self.tasks:
+                        continue  # Unknown dep handled at runtime
+                    if dep_id not in visited:
+                        if dfs(dep_id):
+                            return True
+                    elif dep_id in rec_stack:
+                        return True
+            rec_stack.discard(node_id)
+            return False
+
+        for task_id in self.tasks:
+            if task_id not in visited:
+                if dfs(task_id):
+                    raise ValueError(
+                        f"Circular dependency detected in sub-tasks involving '{task_id}'. "
+                        "Check the dependency graph for cycles."
+                    )
 
     async def execute(self, handler) -> Dict[str, str]:
         """handler: async callable(subtask) -> str"""

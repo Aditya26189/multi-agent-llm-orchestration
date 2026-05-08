@@ -172,3 +172,90 @@ class Orchestrator:
             budget_allocation={next_a.value: 4096},
             confidence=0.5,
         )
+
+
+import asyncio
+from langgraph.graph import StateGraph, END
+
+# Global refs for the synchronous node wrappers
+_budget_mgr = None
+_redis_pub = None
+_orchestrator = None
+_agents_map = None
+_compression_agent = None
+
+def _run(coro):
+    return asyncio.run(coro)
+
+def decomposition_node(state: SharedContext) -> SharedContext:
+    _run(_agents_map[AgentID.DECOMPOSITION].run(state, _budget_mgr, _redis_pub))
+    return state
+
+def retrieval_node(state: SharedContext) -> SharedContext:
+    _run(_agents_map[AgentID.RETRIEVAL].run(state, _budget_mgr, _redis_pub))
+    return state
+
+def critique_node(state: SharedContext) -> SharedContext:
+    _run(_agents_map[AgentID.CRITIQUE].run(state, _budget_mgr, _redis_pub))
+    return state
+
+def synthesis_node(state: SharedContext) -> SharedContext:
+    _run(_agents_map[AgentID.SYNTHESIS].run(state, _budget_mgr, _redis_pub))
+    return state
+
+def compression_node(state: SharedContext) -> SharedContext:
+    _run(_compression_agent.compress(
+        agent_id="compression",
+        text=state.final_answer,
+        target_tokens=1000,
+        budget_mgr=_budget_mgr,
+        context=state
+    ))
+    return state
+
+def route(state: SharedContext) -> str:
+    """One structured LLM call → RoutingDecision → next node name."""
+    if state.status == "done" or state.turn >= MAX_TURNS:
+        return END
+
+    decision = _run(_orchestrator.route(state, _budget_mgr, _redis_pub))
+    
+    # Prevent infinite loops in synthesis
+    if decision.next_agent.value == "synthesis" and state.has_agent_run(AgentID.SYNTHESIS):
+        state.status = "done"
+        return END
+
+    agent_to_node = {
+        "decomposition": "decomposition",
+        "retrieval": "retrieval",
+        "critique": "critique",
+        "synthesis": "synthesis",
+        "compression": "compression",
+        "done": END,
+    }
+    return agent_to_node.get(decision.next_agent.value, END)
+
+def build_pipeline(orchestrator, agents_map, budget_mgr, redis_pub, compression_agent):
+    """Call once per Celery task. Injects deps via module-level refs."""
+    global _budget_mgr, _redis_pub, _orchestrator, _agents_map, _compression_agent
+    _budget_mgr = budget_mgr
+    _redis_pub = redis_pub
+    _orchestrator = orchestrator
+    _agents_map = agents_map
+    _compression_agent = compression_agent
+
+    graph = StateGraph(SharedContext)
+    graph.add_node("decomposition", decomposition_node)
+    graph.add_node("retrieval",     retrieval_node)
+    graph.add_node("critique",      critique_node)
+    graph.add_node("synthesis",     synthesis_node)
+    graph.add_node("compression",   compression_node)
+
+    graph.set_entry_point("decomposition")
+    graph.add_conditional_edges("decomposition", route)
+    graph.add_conditional_edges("retrieval",     route)
+    graph.add_conditional_edges("critique",      route)
+    graph.add_conditional_edges("synthesis",     route)
+    graph.add_conditional_edges("compression",   route)
+
+    return graph.compile()

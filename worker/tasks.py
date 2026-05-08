@@ -17,7 +17,7 @@ from worker.celery_app import app
 from core.context import SharedContext, AgentID, JobStatus, EventType
 from core.budget import ContextBudgetManager, BudgetOverflowError
 from core.streaming import RedisPublisher
-from agents.orchestrator import Orchestrator, MAX_TURNS
+from agents.orchestrator import Orchestrator, MAX_TURNS, build_pipeline
 from agents.decomposition import DecompositionAgent
 from agents.retrieval import RetrievalAgent
 from agents.critique import CritiqueAgent
@@ -68,72 +68,30 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
 
         try:
             # ── MAIN PIPELINE LOOP ─────────────────────────────────────────────
-            # IMPORTANT: Orchestrator drives routing — NOT a hardcoded sequence.
-            while context.status == JobStatus.RUNNING and context.turn < MAX_TURNS:
-
-                decision = await orchestrator.route(context, budget_mgr, redis_pub)
-                next_agent_id = decision.next_agent
-
-                # Check if pipeline should end
-                if next_agent_id == AgentID.SYNTHESIS and context.has_agent_run(AgentID.SYNTHESIS):
-                    context.status = JobStatus.DONE
-                    break
-
-                agent = agents.get(next_agent_id)
-                if agent is None:
-                    break
-
-                # Publish agent start event
-                await redis_pub.publish(context.job_id, {
-                    "event_type": "AGENT_START",
-                    "agent_id": next_agent_id.value,
-                    "turn": context.turn,
-                })
-
-                # Auto-trigger compression if any agent near 90% budget limit
-                for aid, entry in budget_mgr.get_registry().items():
-                    if entry.used_tokens > entry.max_tokens * 0.90:
-                        await redis_pub.publish(context.job_id, {
-                            "event_type": "COMPRESSION_TRIGGERED",
-                            "agent_id": aid,
-                            "used": entry.used_tokens,
-                            "max": entry.max_tokens,
-                        })
-                        if context.final_answer and len(context.final_answer) > 300:
-                            context.final_answer = await compression_agent.compress(
-                                agent_id=aid,
-                                text=context.final_answer,
-                                target_tokens=int(entry.max_tokens * 0.7),
-                                budget_mgr=budget_mgr,
-                                context=context,
-                            )
-
-                # Run agent
-                try:
-                    await agent.run(context, budget_mgr, redis_pub)
-                except BudgetOverflowError:
-                    # Budget violation already logged in assert_compliant()
-                    # Continue pipeline — compression will handle on next iteration
-                    pass
-
-                # Check if synthesis just completed
-                if next_agent_id == AgentID.SYNTHESIS:
-                    context.status = JobStatus.DONE
-                    break
+            pipeline = build_pipeline(
+                orchestrator=orchestrator,
+                agents_map=agents,
+                budget_mgr=budget_mgr,
+                redis_pub=redis_pub,
+                compression_agent=compression_agent
+            )
+            
+            # Run LangGraph pipeline synchronously as required by Celery context
+            final_state = pipeline.invoke(context)
 
             # ── PIPELINE COMPLETE ──────────────────────────────────────────────
-            if context.status != JobStatus.DONE:
-                context.status = JobStatus.DONE
+            if final_state.status != JobStatus.DONE:
+                final_state.status = JobStatus.DONE
 
-            await redis_pub.publish_done(context.job_id, context.final_answer)
+            await redis_pub.publish_done(final_state.job_id, final_state.final_answer)
 
             # Persist to DB
-            await _save_context_to_db(context)
+            await _save_context_to_db(final_state)
 
             return {
-                "job_id": context.job_id,
+                "job_id": final_state.job_id,
                 "status": "done",
-                "final_answer": context.final_answer,
+                "final_answer": final_state.final_answer,
             }
 
         except Exception as e:
@@ -151,20 +109,25 @@ async def _save_context_to_db(context: SharedContext) -> None:
     from db.session import AsyncSessionLocal
     from sqlalchemy import text
 
+    from core.cost import CostCalculator
+    cost_usd = CostCalculator.calculate_cost(context)
+
     async with AsyncSessionLocal() as db:
         # Upsert job
         await db.execute(text("""
-            INSERT INTO jobs (job_id, query, status, completed_at, total_tokens_used, model_used)
-            VALUES (:jid, :q, :s, NOW(), :tok, :model)
+            INSERT INTO jobs (job_id, query, status, completed_at, total_tokens_used, total_cost_usd, model_used)
+            VALUES (:jid, :q, :s, NOW(), :tok, :cost, :model)
             ON CONFLICT (job_id) DO UPDATE SET
                 status = EXCLUDED.status,
                 completed_at = EXCLUDED.completed_at,
-                total_tokens_used = EXCLUDED.total_tokens_used
+                total_tokens_used = EXCLUDED.total_tokens_used,
+                total_cost_usd = EXCLUDED.total_cost_usd
         """), {
             "jid": context.job_id,
             "q": context.query,
             "s": context.status.value,
             "tok": sum(e.used_tokens for e in context.budget_registry.values()),
+            "cost": cost_usd,
             "model": "gemini-2.0-flash",
         })
 

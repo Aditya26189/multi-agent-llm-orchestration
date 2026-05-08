@@ -167,9 +167,10 @@ async def tool_code_exec(
             )
 
     try:
+        import sys
         proc = await asyncio.wait_for(
             asyncio.create_subprocess_exec(
-                "python3", "-c", code,
+                sys.executable, "-c", code,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             ),
@@ -254,8 +255,24 @@ Return ONLY the SQL. No markdown, no explanation."""
             )
 
         from sqlalchemy import text
-        result = await db_session.execute(text(sql))
-        rows = result.mappings().all()
+        from sqlalchemy.ext.asyncio import create_async_engine
+        import os
+        
+        # Enforce read-only at the database connection level by parsing the original DATABASE_URL
+        # and replacing the credentials with the mega_readonly user.
+        db_url = os.environ.get("DATABASE_URL", "")
+        if "@" in db_url:
+            base_url = db_url.split("@")[1]
+            readonly_url = f"postgresql+asyncpg://mega_readonly:readonly_pass@{base_url}"
+        else:
+            readonly_url = db_url
+
+        engine = create_async_engine(readonly_url)
+        async with engine.connect() as conn:
+            result = await conn.execute(text(sql))
+            rows = result.mappings().all()
+            
+        await engine.dispose()
 
         if not rows:
             return ToolResult(

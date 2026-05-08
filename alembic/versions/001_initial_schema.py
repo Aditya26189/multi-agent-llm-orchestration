@@ -170,6 +170,16 @@ def upgrade() -> None:
             timestamp       TIMESTAMPTZ DEFAULT NOW()
         )
     """)
+    # prompt_versions — tracks active prompt per agent (Section 4 schema)
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS prompt_versions (
+            version_id  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            agent_id    VARCHAR(50),
+            prompt_text TEXT NOT NULL,
+            created_at  TIMESTAMPTZ DEFAULT NOW(),
+            is_active   BOOLEAN DEFAULT TRUE
+        )
+    """)
 
 
 def downgrade() -> None:
