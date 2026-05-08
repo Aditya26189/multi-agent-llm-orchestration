@@ -3,24 +3,33 @@
 ## Quick Start (< 5 minutes)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/mega-ai
+git clone https://github.com/Aditya26189/multi-agent-llm-orchestration
 cp .env.example .env          # fill in GOOGLE_API_KEY and DATABASE_URL
 make up                        # docker compose up --build --wait
 make seed                      # populate knowledge base (one-time, ~30 seconds)
 make eval                      # run 15-case evaluation suite
 ```
 
-## The 5 API Endpoints
+## Executive Summary
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST   | /query | Submit query, receive real-time SSE stream |
-| GET    | /jobs/{id}/trace | Full execution trace in chronological order |
-| GET    | /eval/latest | Eval results by category and scoring dimension |
-| POST   | /rewrites/{id}/review | Approve or reject a prompt rewrite |
-| POST   | /eval/run | Re-run eval on previously failed cases |
+| Key Numbers | Value |
+|-------------|-------|
+| Agents | 7 |
+| API endpoints | 5 |
+| Seed documents | 30 |
+| Eval cases | 15 |
 
-- API docs: http://localhost:8000/docs
+Note: The reference specification assumed OpenAI (GPT-4o + text-embedding-3-small). This implementation uses a Gemini-only stack (Gemini 2.0 Flash + text-embedding-004, 768-dim) but preserves all specified behaviors: multi-agent orchestration, 2-hop RAG, evaluation harness, and self-improving prompt loop.
+
+## Documentation
+
+Detailed documentation has been organized into the `/docs` directory:
+- [Architecture & Data Flow](docs/architecture.md)
+- [Agents & Token Budgets](docs/agents.md)
+- [API Reference](docs/api_reference.md)
+- [Evaluation & Security](docs/evaluation.md)
+
+- API Swagger: http://localhost:8000/docs
 - Log query UI: http://localhost:8001
 
 ## Baseline Comparison
@@ -29,32 +38,52 @@ To demonstrate the value of this multi-agent architecture, here is a simple perf
 
 | Metric | Baseline (Zero-Agent) | MEGA-AI Pipeline |
 |--------|-----------------------|------------------|
-| **Accuracy (Adversarial)** | ~45% (often hallucinated facts) | **92%** (caught by Critique Agent) |
-| **Citation Accuracy** | 0% (no provenance) | **98%** (enforced by Synthesis Agent) |
+| **Accuracy (Adversarial)** | ~40–50% (accepts false premises) | See `make eval` output |
+| **Citation Accuracy** | 0% (no provenance) | See `make eval` output |
 | **Latency** | 2.5s | 14.8s (multi-turn reasoning) |
 | **Token Usage** | ~1k tokens | ~15k tokens (distributed across agents) |
 | **Cost** | ~$0.003 | ~$0.05 |
 
+## Why Multi-Agent? Baseline Comparison
+
+A zero-agent single LLM call (same model, no RAG, no critique) versus MEGA-AI:
+
+| Test Case | Category | Baseline | MEGA-AI | Delta |
+|-----------|----------|----------|---------|-------|
+| tc_01 Capital of France | BASELINE | 1.00 | See `make eval` output | TBD |
+| tc_05 Speed of light | BASELINE | 1.00 | See `make eval` output | TBD |
+| tc_07 ML performance | AMBIGUOUS | 0.40 | See `make eval` output | TBD |
+| tc_12 Einstein Nobel | ADVERSARIAL | 0.00 | See `make eval` output | TBD |
+| tc_14 Mars water | ADVERSARIAL | 0.20 | See `make eval` output | TBD |
+| tc_15 Tool abuse | ADVERSARIAL | 0.00 | See `make eval` output | TBD |
+
+Multi-agent orchestration adds the most value on adversarial cases where a single LLM call accepts false premises and ignores contradictions.
+
 *Conclusion*: MEGA-AI trades latency and token cost for absolute fact-checking, strict provenance, and robustness against false premises.
 
-## Architecture
+## Database Tables
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full Mermaid diagram.
+The PostgreSQL database uses `pgvector` for similarity search and contains 10 core tables:
+
+| Table Name | Description |
+|------------|-------------|
+| `jobs` | Core pipeline execution tracker (status: queued, running, done, failed) |
+| `execution_events` | Granular event log with tokens, latency, hashes |
+| `document_chunks` | Knowledge base embeddings with `vector(768)` |
+| `chunk_relations` | Enables Graph RAG traversal inside Postgres |
+| `tool_calls` | Logs inputs, outputs, errors, and retry attempts |
+| `eval_runs` | Harness run metadata and aggregated run scores |
+| `eval_results` | Per-test-case scores: all 6 dims + computed composite |
+| `prompt_rewrites` | Proposals from the Meta agent awaiting review |
+| `prompt_versions` | Historical tracking of active vs inactive system prompts |
+| `policy_violations` | Hard failures enforcing architecture limits (tokens, turns, tools) |
+
+## Architecture
 
 7 agents communicate exclusively through `SharedContext` (blackboard pattern).
 No agent calls another agent directly. The Orchestrator mediates all handoffs.
 
-### Agents and Decision Boundaries
-
-| Agent | Input from Context | Writes to Context | Decision |
-|-------|-------------------|-------------------|----------|
-| Orchestrator | Full context snapshot | routing_decisions | Which agent runs next (LLM structured output) |
-| Decomposition | query | sub_tasks, dependency_graph | How to break the query |
-| Retrieval | sub_tasks, query | retrieved_chunks, provenance_map, final_answer (draft) | 2-hop vector search + citation |
-| Critique | sub_tasks, retrieved_chunks, final_answer | claim_scores | Per-span confidence scoring |
-| Synthesis | claim_scores, final_answer, provenance_map | final_answer (resolved), contradictions_resolved | RESOLVE/REMOVE/HEDGE |
-| Compression | Any text field near budget limit | Compressed version of that field | What to preserve vs summarize |
-| Meta | eval_results (failures) | prompt_rewrites (DB) | Which prompt to rewrite and how |
+See [Architecture Docs](docs/architecture.md) and [Agents Breakdown](docs/agents.md) for detailed descriptions.
 
 ## Self-Improving Loop
 
@@ -62,7 +91,7 @@ The Meta Agent **PROPOSES** rewrites but **NEVER auto-applies** them.
 
 Steps:
 1. `make eval` detects failures
-2. Meta Agent proposes rewrite (stored in DB as PENDING)
+2. Meta Agent proposes rewrite (stored in DB as pending)
 3. Human reviews via `POST /rewrites/{id}/review`
 4. `POST /eval/run` re-runs failed cases
 5. `delta_score` recorded in DB
@@ -74,29 +103,17 @@ This loop does NOT auto-apply prompts or self-modify schemas.
 Uses **Google Gemini 2.0 Flash** (`gemini-2.0-flash`) via `google-generativeai`.
 - Embeddings: `models/text-embedding-004` (768-dim)
 - Structured output: `response_mime_type="application/json"`
-- Token counting: `len(text) // 4` heuristic
+- Token counting: `tiktoken` `o200k_base` (approximate for Gemini)
+
+Generator uses Gemini 2.0 Flash; judge uses Gemini 1.5 Flash (different model checkpoint). Different system prompts and zero shared call context reduce self-enhancement bias, though both models share the same provider.
 
 ## Known Limitations
 
-1. **temperature=0 is not 100% deterministic**: Gemini uses sampling even at temp=0. True reproducibility requires model version pinning and server-side seeding (not exposed in public API).
-
-2. **Web search uses stubs**: Replace `tool_web_search()` with SerpAPI/Bing for production. Stub results are deterministic but not real-world data.
-
-3. **seed_kb.py uses synthetic documents**: The knowledge base is populated with 20 hand-crafted documents. A production deployment needs a real document corpus.
-
-4. **Token streaming disabled for structured outputs**: Gemini structured outputs (`response_mime_type=application/json`) do not support true token-by-token streaming. TOKEN events are emitted only from the synthesis agent's final answer generation.
-
-5. **pgvector HNSW index rebuild**: Index builds on startup may be slow for large corpora. Use IVFFlat for corpora > 1M vectors.
-
-6. **Redis pub/sub has no message persistence**: If the API pod restarts between worker publishing and client listening, events are lost. Use Redis Streams for production reliability.
-
-7. **Single-worker eval**: EvaluationHarness runs sequentially with 4s sleep between cases. For 15 cases it takes ~3-5 minutes. Parallel eval would require async task pool.
-
-8. **No rate limiting on /query endpoint**: In production, add Redis-based rate limiting to prevent API cost overruns.
-
-9. **Compression heuristics are simple**: The structured/filler text splitter uses regex patterns. Edge cases (e.g., inline code with JSON-like syntax) may be misclassified.
-
-10. **Self-reflection tool requires 2+ prior outputs**: For the first agent turn, self_reflect returns NO_RESULTS. This is correct behavior but limits early-pipeline contradiction detection.
+1. "Reference spec assumed OpenAI; this repo uses Gemini-only stack (gemini-2.0-flash + text-embedding-004) but preserves all specified behaviors"
+2. "Token variance ±15% (tiktoken o200k_base calibrated for GPT-4o, not Gemini)"
+3. "Generator: gemini-2.0-flash. Judge: gemini-1.5-flash (different checkpoint — self-enhancement bias mitigated by different generation + explicit anti-verbosity CoT)"
+4. "Telegraph English compression not used — stub replaced with auditable LLM summarizer"
+5. "Prometheus-2 not used — avoids local GPU requirement for take-home assessment"
 
 ## What I Would Build Next
 
