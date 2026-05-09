@@ -19,8 +19,8 @@ async def get_latest_eval(db: AsyncSession = Depends(get_db)):
     run_row = run.mappings().first()
     if not run_row:
         raise HTTPException(status_code=404, detail={
-            "code": "EVAL_NOT_READY",
-            "message": "No evaluation runs completed yet.",
+            "error_code": "EVAL_NOT_READY",
+            "message": "No evaluation runs have completed yet. Run POST /eval/run first.",
         })
 
     results = await db.execute(

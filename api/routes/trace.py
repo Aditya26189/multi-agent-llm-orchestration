@@ -22,8 +22,8 @@ async def get_trace(job_id: str, db: AsyncSession = Depends(get_db)):
     job = job_row.mappings().first()
     if not job:
         raise HTTPException(status_code=404, detail={
-            "code": "JOB_NOT_FOUND",
-            "message": f"No job with ID {job_id}",
+            "error_code": "JOB_NOT_FOUND",
+            "message": f"No job exists with ID: {job_id}",
             "job_id": job_id,
         })
 

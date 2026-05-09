@@ -19,15 +19,16 @@ class ErrorResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
+# All valid error codes — used across all 5 endpoints
 ERROR_CODES = {
-    "JOB_NOT_FOUND":            "No job with the specified ID exists.",
-    "EVAL_NOT_READY":           "No evaluation runs completed yet.",
-    "REWRITE_ALREADY_REVIEWED": "This rewrite has already been reviewed.",
-    "REWRITE_NOT_FOUND":        "No rewrite with this ID exists.",
-    "INVALID_QUERY":            "Query must be a non-empty string.",
-    "BUDGET_EXCEEDED":          "Agent exceeded context token budget.",
-    "TOOL_ALL_RETRIES_FAILED":  "Tool failed after maximum retry attempts.",
-    "INJECTION_DETECTED":       "Query rejected due to prompt injection pattern.",
+    "INJECTION_DETECTED":       "Query rejected: prompt injection pattern detected.",
+    "INVALID_QUERY":            "Query must be a non-empty string (max 4000 chars).",
+    "JOB_NOT_FOUND":            "No job exists with the specified ID.",
+    "EVAL_NOT_READY":           "No evaluation runs have completed yet.",
+    "REWRITE_NOT_FOUND":        "No prompt rewrite exists with the specified ID.",
+    "REWRITE_ALREADY_REVIEWED": "This rewrite has already been approved or rejected.",
+    "PIPELINE_ERROR":           "Pipeline failed during execution.",
+    "INTERNAL_ERROR":           "An unexpected internal error occurred.",
 }
 
 
