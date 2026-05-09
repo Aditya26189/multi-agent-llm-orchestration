@@ -7,7 +7,8 @@ down:
 	docker compose down -v
 
 seed:
-	docker compose exec api python scripts/seed_kb.py
+	docker compose run --rm api alembic upgrade head
+	docker compose run --rm api python scripts/seed_kb.py
 
 test:
 	docker compose exec api pytest tests/ -v --tb=short

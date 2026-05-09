@@ -9,6 +9,11 @@ from typing import AsyncGenerator, Optional
 import redis.asyncio as aioredis
 from core.context import EventType
 
+try:
+    from fastapi.sse import ServerSentEvent
+except ImportError:
+    from sse_starlette.sse import ServerSentEvent
+
 
 class RedisPublisher:
     """Publishes SSE events to Redis pub/sub channel for a job."""
@@ -16,6 +21,7 @@ class RedisPublisher:
     def __init__(self, redis_url: Optional[str] = None):
         self._url = redis_url or os.environ["REDIS_URL"]
         self._client: Optional[aioredis.Redis] = None
+        self._seq = 0
 
     async def connect(self):
         self._client = aioredis.from_url(self._url, decode_responses=True)
@@ -28,6 +34,9 @@ class RedisPublisher:
         if not self._client:
             await self.connect()
         channel = f"job_events:{job_id}"
+        if "id" not in event_data:
+            event_data["id"] = self._seq
+            self._seq += 1
         await self._client.publish(channel, json.dumps(event_data, default=str))
 
     async def publish_token(self, job_id: str, agent_id: str, token: str) -> None:
@@ -88,7 +97,11 @@ async def sse_event_generator(
             try:
                 data = json.loads(message["data"])
                 event_type = data.get("event_type", "message")
-                yield {"event": event_type, "data": json.dumps(data)}
+                yield ServerSentEvent(
+                    data=json.dumps(data),
+                    event=event_type,
+                    id=str(data.get("id", "")),
+                )
 
                 if event_type in (EventType.DONE.value, EventType.ERROR.value):
                     break

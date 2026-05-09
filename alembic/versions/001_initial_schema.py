@@ -26,6 +26,7 @@ def upgrade() -> None:
     op.execute("""
         CREATE INDEX IF NOT EXISTS idx_chunks_embedding
         ON document_chunks USING hnsw (embedding vector_cosine_ops)
+        WITH (m = 16, ef_construction = 64)
     """)
 
     # Core job tracking
@@ -33,7 +34,8 @@ def upgrade() -> None:
         CREATE TABLE IF NOT EXISTS jobs (
             job_id      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             query       TEXT NOT NULL,
-            status      VARCHAR(20) NOT NULL DEFAULT 'queued',
+            status      VARCHAR(20) NOT NULL DEFAULT 'queued'
+                        CHECK (status IN ('queued','running','done','failed')),
             created_at  TIMESTAMPTZ DEFAULT NOW(),
             completed_at TIMESTAMPTZ,
             total_tokens_used INT DEFAULT 0,
@@ -72,7 +74,8 @@ def upgrade() -> None:
             job_id      UUID NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
             agent_id    VARCHAR(50) NOT NULL,
             tool_name   VARCHAR(50) NOT NULL,
-            attempt_number INT NOT NULL DEFAULT 1,
+            attempt_number INT NOT NULL DEFAULT 1
+                          CHECK (attempt_number BETWEEN 1 AND 3),
             input_json  JSONB,
             output_json JSONB,
             latency_ms  FLOAT DEFAULT 0.0,
@@ -113,7 +116,14 @@ def upgrade() -> None:
             tool_efficiency         FLOAT,
             budget_compliance       FLOAT,
             critique_agreement      FLOAT,
-            composite_score         FLOAT,
+            composite_score         FLOAT GENERATED ALWAYS AS (
+                COALESCE(answer_correctness,0)       * 0.30 +
+                COALESCE(citation_accuracy,0)        * 0.15 +
+                COALESCE(contradiction_resolution,0) * 0.20 +
+                COALESCE(tool_efficiency,0)          * 0.15 +
+                COALESCE(budget_compliance,0)        * 0.10 +
+                COALESCE(critique_agreement,0)       * 0.10
+            ) STORED,
             justifications          JSONB,
             prompt_sent_json        JSONB,
             tool_calls_json         JSONB,
@@ -123,6 +133,7 @@ def upgrade() -> None:
     """)
     op.execute("CREATE INDEX IF NOT EXISTS idx_eval_results_run ON eval_results(run_id)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_eval_results_case ON eval_results(test_case_id)")
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_results_run_case ON eval_results(run_id, test_case_id)")
 
     # Prompt rewrites — self-improving loop
     op.execute("""
@@ -137,7 +148,8 @@ def upgrade() -> None:
             justification   TEXT NOT NULL,
             failure_cases   JSONB,
             expected_improvement TEXT,
-            status          VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+            status          VARCHAR(20) NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending','approved','rejected')),
             reviewed_at     TIMESTAMPTZ,
             reviewer_note   TEXT,
             delta_score     JSONB

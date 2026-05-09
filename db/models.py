@@ -51,10 +51,19 @@ class PromptRewrite(Base):
     justification = Column(Text, nullable=False)
     failure_cases = Column(JSONB, nullable=True)
     expected_improvement = Column(Text, nullable=True)
-    status = Column(String(20), default="PENDING")
+    status = Column(String(20), default="pending")
     reviewed_at = Column(TIMESTAMPTZ, nullable=True)
     reviewer_note = Column(Text, nullable=True)
     delta_score = Column(JSONB, nullable=True)
+
+
+class PromptVersion(Base):
+    __tablename__ = "prompt_versions"
+    version_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    agent_id = Column(String(50), nullable=True)
+    prompt_text = Column(Text, nullable=False)
+    created_at = Column(TIMESTAMPTZ, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
 
 
 class EvalRun(Base):

@@ -141,8 +141,9 @@ def broaden_web_query(kwargs: dict, error_code: str, attempt: int) -> dict:
 # ── Tool 2: Code Execution Sandbox ────────────────────────────────────────────
 
 BLOCKED_PATTERNS = [
-    "os.system", "subprocess", "shutil.rmtree", "__import__(",
-    "exec(", "eval(", "open(", "socket.", "urllib",
+    "import os", "import sys", "import subprocess", "open(",
+    "importlib", "pathlib", "socket", "urllib", "requests",
+    "__builtins__", "__import__", "exec(", "eval("
 ]
 
 
@@ -162,7 +163,7 @@ async def tool_code_exec(
         if pattern in code:
             return ToolResult(
                 success=False, error_code="INVALID_INPUT",
-                error_message=f"Blocked pattern '{pattern}' found",
+                error_message=f"Code contains blocked pattern: {pattern}",
                 tool_name="code_exec",
             )
 
@@ -258,14 +259,11 @@ Return ONLY the SQL. No markdown, no explanation."""
         from sqlalchemy.ext.asyncio import create_async_engine
         import os
         
-        # Enforce read-only at the database connection level by parsing the original DATABASE_URL
-        # and replacing the credentials with the mega_readonly user.
+        # Enforce read-only at the database connection level by replacing the user.
         db_url = os.environ.get("DATABASE_URL", "")
-        if "@" in db_url:
-            base_url = db_url.split("@")[1]
-            readonly_url = f"postgresql+asyncpg://mega_readonly:readonly_pass@{base_url}"
-        else:
-            readonly_url = db_url
+        readonly_user = os.environ.get("POSTGRES_READONLY_USER", "mega_readonly")
+        primary_user = os.environ.get("POSTGRES_USER", "")
+        readonly_url = db_url.replace(primary_user, readonly_user) if primary_user else db_url
 
         engine = create_async_engine(readonly_url)
         async with engine.connect() as conn:

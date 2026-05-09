@@ -38,7 +38,7 @@ Final Answer:
 <write the resolved answer here>
 
 Resolution Log (JSON):
-{{"resolutions": [{{"span": "...", "action": "RESOLVE|REMOVE|HEDGE", "explanation": "..."}}]}}"""
+{{"resolutions": [{{"original": "...", "resolution_type": "RESOLVE|REMOVE|HEDGE", "new_text": "...", "claim_score_id": "..."}}]}}"""
 
 
 class SynthesisAgent(BaseAgent):
@@ -55,10 +55,10 @@ class SynthesisAgent(BaseAgent):
                 "event_type": "AGENT_START", "agent_id": "synthesis"
             })
 
-        flagged = context.get_flagged_claims()
+        flagged = [(i, c) for i, c in enumerate(context.claim_scores) if c.flagged]
         flagged_text = "\n".join(
-            f"- [{c.confidence:.2f}] '{c.span[:100]}': {c.flag_reason or 'flagged'}"
-            for c in flagged
+            f"- [id={i}] [{c.confidence:.2f}] '{c.span[:100]}': {c.flag_reason or 'flagged'}"
+            for i, c in flagged
         ) or "No flagged claims."
 
         chunks_text = "\n\n".join(
@@ -94,10 +94,25 @@ class SynthesisAgent(BaseAgent):
             final_answer = full_response.split("Final Answer:", 1)[1].strip()
 
         context.final_answer = final_answer
-        context.contradictions_resolved = [
-            {"span": r.get("span", ""), "action": r.get("action", ""), "explanation": r.get("explanation", "")}
-            for r in resolutions
-        ]
+        resolved_entries = []
+        for item in resolutions:
+            resolved_entries.append({
+                "original": item.get("original", ""),
+                "resolution_type": item.get("resolution_type", ""),
+                "new_text": item.get("new_text", ""),
+                "claim_score_id": item.get("claim_score_id", ""),
+            })
+
+        if not resolved_entries and flagged:
+            for idx, claim in flagged:
+                resolved_entries.append({
+                    "original": claim.span,
+                    "resolution_type": "HEDGE",
+                    "new_text": claim.span,
+                    "claim_score_id": str(idx),
+                })
+
+        context.contradictions_resolved = resolved_entries
 
         # Update provenance map with synthesis sentences
         valid_ids = {c.id for c in context.retrieved_chunks}

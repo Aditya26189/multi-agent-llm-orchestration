@@ -1,19 +1,16 @@
-"""
-Cost calculation logic mapping token usage to USD based on Gemini pricing.
-"""
-from typing import Dict
-from core.context import SharedContext
+"""Token-to-USD cost calculation based on Gemini published pricing."""
 
-# Pricing for Gemini 2.0 Flash (as of mid-2024, approximately $0.15 per 1M input tokens, $0.60 per 1M output tokens)
-# Since we just have generic token counts from our len//4 heuristic, we will use a blended rate of $0.35 per 1M tokens.
-GEMINI_FLASH_BLENDED_RATE_PER_1M = 0.35
+# Official Gemini Flash rates (per token, USD)
+INPUT_COST_PER_TOKEN  = 0.000_000_075   # gemini-2.0-flash input
+OUTPUT_COST_PER_TOKEN = 0.000_000_30    # gemini-2.0-flash output
+
+GEMINI_PRICING = {
+    "gemini-2.0-flash": {"input": INPUT_COST_PER_TOKEN,  "output": OUTPUT_COST_PER_TOKEN},
+    "gemini-1.5-flash": {"input": 0.000_000_075, "output": 0.000_000_30},
+}
+
 
 class CostCalculator:
-    @staticmethod
-    def calculate_cost(context: SharedContext) -> float:
-        """
-        Calculates the total USD cost for a given job context based on its budget registry.
-        """
-        total_tokens = sum(entry.used_tokens for entry in context.budget_registry.values())
-        cost_usd = (total_tokens / 1_000_000) * GEMINI_FLASH_BLENDED_RATE_PER_1M
-        return round(cost_usd, 6)
+    def calculate(self, model: str, input_tokens: int, output_tokens: int) -> float:
+        pricing = GEMINI_PRICING.get(model, {"input": 0.0, "output": 0.0})
+        return (input_tokens * pricing["input"]) + (output_tokens * pricing["output"])

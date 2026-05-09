@@ -27,15 +27,29 @@ DRAFT ANSWER (pre-synthesis):
 SOURCE CHUNKS (ground truth):
 {chunks}
 
-CRITICAL: Before evaluating the main answer, identify ALL factual premises embedded in the original query.
-If any premise is demonstrably false, flag it with confidence=0.0 and flag_reason='false_premise: [correct fact]'.
-The system MUST NOT answer the original question while accepting a false premise.
+STEP 0 — FALSE PREMISE DETECTION (run this before anything else):
+Examine the ORIGINAL QUERY for embedded factual premises.
+For each premise you can verify against the source chunks:
+- If the premise is demonstrably FALSE: create a ClaimScore with
+    span=<the false premise text>,
+    confidence=0.0,
+    flagged=True,
+    flag_reason='false_premise: <the query assumes X>, but [CHUNK:id] states: <correct fact>'
+- The system MUST NOT answer the original question while accepting a false premise.
+Examples of false premises to catch:
+    'Einstein won the Nobel Prize for relativity' → FALSE
+    'The US annexed Canada in 2024' → FALSE
+    'Mars has confirmed liquid water' → CONTESTED/FALSE
 
 Critique ALL THREE sections above. For each problematic text span:
 - Extract the EXACT span
 - Assign confidence 0.0-1.0 (1.0 = fully supported)
 - Set flagged=true if confidence < 0.6
-- Provide flag_reason citing specific evidence
+- Provide flag_reason citing specific evidence. Format exactly as:
+    'contradicts [CHUNK:uuid] which states: "<exact quote from chunk>"'
+    or for false premises:
+    'false_premise: the query assumes X, but [CHUNK:uuid] states: "<correct fact>"'
+    DO NOT write vague reasons like 'this seems uncertain' or 'unverified claim'.
 
 DO NOT flag without positive evidence. DO NOT evaluate holistically.
 
@@ -65,7 +79,7 @@ class CritiqueAgent(BaseAgent):
             for c in context.retrieved_chunks[:8]
         )
         prompt = CRITIQUE_PROMPT.format(
-            subtasks_json=json.dumps([t.model_dump(mode="json") for t in context.sub_tasks], indent=2),
+            subtasks_json=json.dumps([t.model_dump(mode="json") for t in context.subtasks], indent=2),
             retrieval_answer=context.retrieval_reasoning[:800],
             draft_answer=context.final_answer[:800],
             chunks=chunks_text,

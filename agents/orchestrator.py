@@ -14,7 +14,7 @@ from core.budget import ContextBudgetManager
 from core.streaming import RedisPublisher
 
 MAX_TOOL_CALLS_PER_JOB = 20
-MAX_TURNS = 12
+MAX_TURNS = 10
 
 ORCHESTRATOR_SYSTEM = """You are the master orchestrator of a multi-agent LLM pipeline.
 Decide which agent to invoke next based on the current pipeline state.
@@ -65,16 +65,31 @@ class Orchestrator:
         import asyncio
 
         # Hard limits
+        if context.turn >= MAX_TURNS:
+            context.violations.append(PolicyViolation(
+                agent_id="orchestrator",
+                violation_type="max_turns_exceeded",
+                details=f"Reached MAX_TURNS={MAX_TURNS}, forcing synthesis",
+            ))
+            return RoutingDecision(
+                next_agent=AgentID.SYNTHESIS,
+                reasoning="Hard turn limit reached; forcing synthesis.",
+                budget_allocation={AgentID.SYNTHESIS.value: 4096},
+                confidence=0.5,
+            )
+
         if context.count_tool_calls() >= MAX_TOOL_CALLS_PER_JOB:
             context.violations.append(PolicyViolation(
                 agent_id="orchestrator",
-                violation_type="budget_overflow",
-                details=f"MAX_TOOL_CALLS ({MAX_TOOL_CALLS_PER_JOB}) reached",
+                violation_type="tool_abuse",
+                details=f"Reached MAX_TOOL_CALLS={MAX_TOOL_CALLS_PER_JOB}, forcing synthesis",
             ))
-            return self._deterministic_fallback(context, "tool_limit_reached")
-
-        if context.turn >= MAX_TURNS:
-            return self._deterministic_fallback(context, "max_turns_reached")
+            return RoutingDecision(
+                next_agent=AgentID.SYNTHESIS,
+                reasoning="Tool call limit reached; forcing synthesis.",
+                budget_allocation={AgentID.SYNTHESIS.value: 4096},
+                confidence=0.5,
+            )
 
         # Build concise state summary
         budget_warnings = [
@@ -87,8 +102,8 @@ class Orchestrator:
             "job_id": context.job_id,
             "query": context.query[:200],
             "turn": context.turn,
-            "sub_tasks_done": [t.id for t in context.sub_tasks if t.status.value == "done"],
-            "sub_tasks_pending": [t.id for t in context.sub_tasks if t.status.value == "pending"],
+            "sub_tasks_done": [t.id for t in context.subtasks if t.status.value == "done"],
+            "sub_tasks_pending": [t.id for t in context.subtasks if t.status.value == "pending"],
             "chunks_retrieved": len(context.retrieved_chunks),
             "claims_flagged": len(context.get_flagged_claims()),
             "final_answer_length": len(context.final_answer),
@@ -142,6 +157,7 @@ class Orchestrator:
                     "reasoning": decision.reasoning,
                     "confidence": decision.confidence,
                     "turn": context.turn,
+                    "id": context.turn,
                 })
 
             context.turn += 1
@@ -213,13 +229,23 @@ def compression_node(state: SharedContext) -> SharedContext:
     ))
     return state
 
-def route(state: SharedContext) -> str:
-    """One structured LLM call → RoutingDecision → next node name."""
+def orchestrator_node(state: SharedContext) -> SharedContext:
+    if state.status == "done" or state.turn >= MAX_TURNS:
+        return state
+    decision = _run(_orchestrator.route(state, _budget_mgr, _redis_pub))
+    state.metadata["routing_decision"] = decision
+    return state
+
+
+def route_decision(state: SharedContext) -> str:
+    """Use last RoutingDecision to choose the next node."""
     if state.status == "done" or state.turn >= MAX_TURNS:
         return END
 
-    decision = _run(_orchestrator.route(state, _budget_mgr, _redis_pub))
-    
+    decision = state.metadata.get("routing_decision")
+    if decision is None:
+        decision = _run(_orchestrator.route(state, _budget_mgr, _redis_pub))
+
     # Prevent infinite loops in synthesis
     if decision.next_agent.value == "synthesis" and state.has_agent_run(AgentID.SYNTHESIS):
         state.status = "done"
@@ -245,17 +271,19 @@ def build_pipeline(orchestrator, agents_map, budget_mgr, redis_pub, compression_
     _compression_agent = compression_agent
 
     graph = StateGraph(SharedContext)
+    graph.add_node("orchestrator",  orchestrator_node)
     graph.add_node("decomposition", decomposition_node)
     graph.add_node("retrieval",     retrieval_node)
     graph.add_node("critique",      critique_node)
     graph.add_node("synthesis",     synthesis_node)
     graph.add_node("compression",   compression_node)
 
-    graph.set_entry_point("decomposition")
-    graph.add_conditional_edges("decomposition", route)
-    graph.add_conditional_edges("retrieval",     route)
-    graph.add_conditional_edges("critique",      route)
-    graph.add_conditional_edges("synthesis",     route)
-    graph.add_conditional_edges("compression",   route)
+    graph.set_entry_point("orchestrator")
+    graph.add_conditional_edges("orchestrator", route_decision)
+    graph.add_edge("decomposition", "orchestrator")
+    graph.add_edge("retrieval", "orchestrator")
+    graph.add_edge("critique", "orchestrator")
+    graph.add_edge("synthesis", "orchestrator")
+    graph.add_edge("compression", "orchestrator")
 
     return graph.compile()

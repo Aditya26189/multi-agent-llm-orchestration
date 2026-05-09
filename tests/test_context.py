@@ -6,7 +6,7 @@ def test_shared_context_creation():
     ctx = SharedContext(query="test query")
     assert ctx.query == "test query"
     assert ctx.turn == 0
-    assert len(ctx.sub_tasks) == 0
+    assert len(ctx.subtasks) == 0
     assert "created_at" in ctx.metadata
 
 

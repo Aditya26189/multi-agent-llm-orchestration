@@ -1,7 +1,7 @@
 """
 Meta Agent — analyzes evaluation failures and proposes prompt rewrites.
 Uses difflib.ndiff for auditable diffs. Persists PromptRewrite to DB.
-NEVER auto-applies — status stays PENDING until human reviews.
+NEVER auto-applies — status stays pending until human reviews.
 """
 import difflib
 import json
@@ -53,7 +53,7 @@ class PromptRewrite(BaseModel):
     justification: str
     failure_cases: List[str] = Field(default_factory=list)
     expected_improvement: str
-    status: str = "PENDING"
+    status: str = "pending"
     reviewed_at: Optional[datetime] = None
     reviewer_note: Optional[str] = None
     delta_score: Optional[dict] = None
@@ -103,7 +103,7 @@ class MetaAgent(BaseAgent):
         return rewrite
 
     async def persist_rewrite(self, rewrite: PromptRewrite) -> None:
-        """Persist PromptRewrite to DB. Status stays PENDING — human must review."""
+        """Persist PromptRewrite to DB. Status stays pending — human must review."""
         from db.session import AsyncSessionLocal
         from sqlalchemy import text
 
@@ -112,7 +112,7 @@ class MetaAgent(BaseAgent):
                 INSERT INTO prompt_rewrites
                 (rewrite_id, agent_id, target_dimension, original_prompt, proposed_prompt,
                  diff_json, justification, failure_cases, expected_improvement, status)
-                VALUES (:rid, :aid, :td, :op, :pp, :dj::jsonb, :just, :fc::jsonb, :ei, 'PENDING')
+                VALUES (:rid, :aid, :td, :op, :pp, :dj::jsonb, :just, :fc::jsonb, :ei, 'pending')
                 ON CONFLICT (rewrite_id) DO NOTHING
             """), {
                 "rid": rewrite.rewrite_id,

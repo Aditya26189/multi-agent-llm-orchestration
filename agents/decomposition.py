@@ -77,7 +77,7 @@ class DecompositionAgent(BaseAgent):
                     deps=[],
                 )]
 
-            context.sub_tasks = sub_tasks
+            context.subtasks = sub_tasks
             context.dependency_graph = {t.id: t.deps for t in sub_tasks}
 
             await budget_mgr.consume("decomposition", raw_json)
@@ -92,7 +92,7 @@ class DecompositionAgent(BaseAgent):
 
         except Exception as e:
             # Fallback
-            context.sub_tasks = [SubTask(
+            context.subtasks = [SubTask(
                 id="t1",
                 type=SubTaskType.FACTUAL_LOOKUP,
                 description=context.query,

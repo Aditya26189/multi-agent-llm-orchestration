@@ -1,4 +1,5 @@
 import pytest
+import tiktoken
 from core.budget import ContextBudgetManager, BudgetOverflowError
 from core.context import SharedContext
 
@@ -13,14 +14,16 @@ async def test_declare_and_consume():
 
 
 @pytest.mark.asyncio
-async def test_consume_text_uses_heuristic():
+async def test_consume_text_uses_tokenizer():
     ctx = SharedContext(query="test")
     mgr = ContextBudgetManager(ctx)
     mgr.declare_budget("test_agent", 10000)
-    text = "hello world"  # 11 chars → 11 // 4 = 2 tokens
+    text = "hello world"
+    enc = tiktoken.get_encoding("o200k_base")
+    expected = max(1, len(enc.encode(text)))
     await mgr.consume("test_agent", text)
     used = ctx.budget_registry["test_agent"].used_tokens
-    assert used == max(1, len(text) // 4)
+    assert used == expected
 
 
 @pytest.mark.asyncio
@@ -55,21 +58,32 @@ async def test_undeclared_agent_raises_keyerror():
         await mgr.consume("ghost_agent", 100)
 
 
-def test_count_tokens_heuristic():
+def test_count_tokens_uses_tokenizer():
     ctx = SharedContext(query="test")
     mgr = ContextBudgetManager(ctx)
     mgr.declare_budget("a", 10000)
-    text = "a" * 400  # 400 chars → 100 tokens
+    text = "a" * 400
+    enc = tiktoken.get_encoding("o200k_base")
+    expected = max(1, len(enc.encode(text)))
     count = mgr.count_tokens(text)
-    assert count == 100
+    assert count == expected
 
 
 def test_preflight_check():
     ctx = SharedContext(query="test")
     mgr = ContextBudgetManager(ctx)
-    mgr.declare_budget("a", 100)
-    assert mgr.preflight_check("a", "a" * 400) is True    # 100 tokens fits exactly
-    assert mgr.preflight_check("a", "a" * 404) is False   # 101 tokens does not fit
+    enc = tiktoken.get_encoding("o200k_base")
+    text_ok = "a" * 400
+    tokens_ok = max(1, len(enc.encode(text_ok)))
+    mgr.declare_budget("a", tokens_ok)
+    assert mgr.preflight_check("a", text_ok) is True
+
+    text_over = text_ok + "a"
+    tokens_over = max(1, len(enc.encode(text_over)))
+    while tokens_over <= tokens_ok:
+        text_over += "a"
+        tokens_over = max(1, len(enc.encode(text_over)))
+    assert mgr.preflight_check("a", text_over) is False
 
 
 def test_get_registry_returns_copy():

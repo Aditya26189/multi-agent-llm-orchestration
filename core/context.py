@@ -127,6 +127,12 @@ class ToolCallRecord(BaseModel):
     retry_reason: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
+    @property
+    def input_hash(self) -> str:
+        return hashlib.sha256(
+            json.dumps(self.input_data, sort_keys=True).encode()
+        ).hexdigest()[:16]
+
 
 class RoutingDecision(BaseModel):
     next_agent: AgentID
@@ -143,7 +149,7 @@ class PolicyViolation(BaseModel):
     agent_id: str
     violation_type: Literal[
         "budget_overflow", "direct_agent_call", "tool_retry_exceeded",
-        "schema_invalid", "injection_detected",
+        "schema_invalid", "injection_detected", "max_turns_exceeded", "tool_abuse",
     ]
     details: str
     tokens_over_budget: Optional[int] = None
@@ -161,6 +167,9 @@ class ExecutionEventSchema(BaseModel):
     output_hash: Optional[str] = None
     latency_ms: float = 0.0
     token_count: int = 0
+    model_used: Optional[str] = None
+    input_token_count: Optional[int] = None
+    output_token_count: Optional[int] = None
     policy_violation: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
@@ -180,7 +189,7 @@ class SharedContext(BaseModel):
     status: JobStatus = JobStatus.QUEUED
 
     # Decomposition outputs
-    sub_tasks: List[SubTask] = Field(default_factory=list)
+    subtasks: List[SubTask] = Field(default_factory=list)
     dependency_graph: Dict[str, List[str]] = Field(default_factory=dict)
 
     # Retrieval outputs
@@ -238,6 +247,11 @@ class SharedContext(BaseModel):
     def snapshot(self) -> Dict[str, Any]:
         return self.model_dump(mode="json")
 
+    def next_seq(self) -> int:
+        seq = int(self.metadata.get("sse_seq", 0))
+        self.metadata["sse_seq"] = seq + 1
+        return seq
+
     def add_event(
         self,
         agent_id: str,
@@ -262,5 +276,8 @@ class SharedContext(BaseModel):
             output_hash=oh,
             latency_ms=latency_ms,
             token_count=token_count,
+            model_used="gemini-2.0-flash",
+            input_token_count=token_count,
+            output_token_count=0,
             policy_violation=policy_violation,
         ))

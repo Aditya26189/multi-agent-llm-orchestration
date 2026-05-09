@@ -15,6 +15,9 @@ from pathlib import Path
 
 import google.generativeai as genai
 
+GENERATOR_MODEL = "gemini-2.0-flash"   # produces answers
+JUDGE_MODEL     = "gemini-1.5-flash"   # scores answers (different checkpoint — anti-bias)
+
 from eval.scorers import (
     score_answer_correctness, score_citation_accuracy,
     score_contradiction_resolution, score_tool_efficiency,
@@ -30,8 +33,8 @@ class EvaluationHarness:
         self.test_cases = json.loads(TEST_CASES_PATH.read_text())
         api_key = os.environ["GOOGLE_API_KEY"]
         genai.configure(api_key=api_key)
-        # Judge model — different call from generator, no self-eval bias concern
-        self.judge_model = genai.GenerativeModel("gemini-2.0-flash")
+        # Judge model — different checkpoint from generator (anti-self-enhancement bias)
+        self.judge_model = genai.GenerativeModel(JUDGE_MODEL)
 
     async def run_all(self, failed_case_ids: list = None) -> dict:
         """
@@ -141,8 +144,8 @@ class EvaluationHarness:
         async with AsyncSessionLocal() as db:
             await db.execute(text("""
                 INSERT INTO eval_runs (run_id, total_score, finished_at, model_used, seed, temperature)
-                VALUES (:rid, :ts, NOW(), 'gemini-2.0-flash', 42, 0.0)
-            """), {"rid": run_id, "ts": total})
+                VALUES (:rid, :ts, NOW(), :gmodel, 42, 0.0)
+            """), {"rid": run_id, "ts": total, "gmodel": GENERATOR_MODEL})
 
             for r in results:
                 await db.execute(text("""

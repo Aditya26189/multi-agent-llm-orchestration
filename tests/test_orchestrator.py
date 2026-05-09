@@ -81,8 +81,8 @@ async def test_route_returns_fallback_at_max_turns():
     budget.declare_budget("orchestrator", 2048)
 
     decision = await orch.route(ctx, budget, redis_pub=None)
-    assert decision.next_agent in list(AgentID)
-    assert "FALLBACK" in decision.reasoning
+    assert decision.next_agent == AgentID.SYNTHESIS
+    assert any(v.violation_type == "max_turns_exceeded" for v in ctx.violations)
 
 
 # ─── Tool Call Hard Limit ─────────────────────────────────────────────────
@@ -105,9 +105,8 @@ async def test_route_returns_fallback_at_tool_limit():
         ))
 
     decision = await orch.route(ctx, budget, redis_pub=None)
-    assert "FALLBACK" in decision.reasoning
-    # Should have logged a violation
-    assert any(v.violation_type == "budget_overflow" for v in ctx.violations)
+    assert decision.next_agent == AgentID.SYNTHESIS
+    assert any(v.violation_type == "tool_abuse" for v in ctx.violations)
 
 
 # ─── LLM Path (mocked) ───────────────────────────────────────────────────
