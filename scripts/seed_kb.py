@@ -102,6 +102,7 @@ async def seed() -> None:
                     text("""
                         INSERT INTO document_chunks (id, content, embedding, source_url)
                         VALUES (:id, :content, :emb::vector, :src)
+                        ON CONFLICT DO NOTHING
                     """),
                     {
                         "id": str(uuid.uuid4()),
