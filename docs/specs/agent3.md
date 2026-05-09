@@ -1365,7 +1365,7 @@ Write this README exactly:
 # MEGA-AI: Production Multi-Agent LLM Orchestration System
 
 ## Quick Start (< 5 minutes)
-git clone https://github.com/YOUR_USERNAME/mega-ai
+git clone https://github.com/Aditya26189/multi-agent-llm-orchestration
 cp .env.example .env          # fill in OPENAI_API_KEY and update DATABASE_URL
 make up                        # docker compose up --build --wait
 make seed                      # populate knowledge base (one-time, ~30 seconds)
