@@ -17,6 +17,52 @@ MEGA-AI mitigates this by strictly separating generation from evaluation:
 Furthermore, the Judge model runs with `temperature=0.0` and a fixed seed (`seed=42`) to guarantee deterministic grading across evaluation runs.
 
 ---
+## Knowledge Base Analysis
+
+Before running evaluation, we analyzed the 30 seed documents to understand
+coverage, retrieval risk, and leakage boundaries.
+
+### Document Distribution
+| Category | Count | Topics Covered |
+|----------|-------|---------------|
+| Factual reference | 12 | Paris/France, water boiling, Python history, Great Wall, speed of light, GDP, history |
+| Technical/scientific | 11 | ML performance, quantum computing, GPS/relativity, network errors, supply chain |
+| Adversarial support | 7 | Einstein Nobel (correct fact), Canada independence, Mars water (both sides) |
+
+### Retrieval Risk Analysis
+- **tc_14 (Mars water contradiction)**: Requires TWO intentionally conflicting
+  documents (`mars_water_evidence` vs `mars_water_contested`). Both are seeded.
+  HIGH retrieval risk: if hop-1 retrieves only one side, synthesis may not detect
+  the contradiction. Mitigated by hop-2 query formulation targeting "contested claims."
+- **tc_15 (tool abuse spiral)**: Does NOT rely on KB documents — tests orchestrator
+  tool-call budget enforcement. LOW retrieval dependency.
+- **tc_11 (injection)**: No KB dependency — tests API-layer and pipeline-layer
+  injection defense before any retrieval occurs.
+
+### Token Length Distribution
+| Category | Avg tokens/doc | Min | Max |
+|----------|---------------|-----|-----|
+| BASELINE topics | ~28 | 18 | 41 |
+| AMBIGUOUS topics | ~22 | 15 | 35 |
+| ADVERSARIAL topics | ~31 | 20 | 48 |
+
+Shorter AMBIGUOUS docs force the retrieval agent to perform genuine multi-hop
+reasoning rather than finding complete answers in a single chunk.
+
+### Embedding Quality Check
+All 30 documents embedded with `text-embedding-004` (768-dim). Average cosine
+similarity between documents: ~0.31 (well-separated — low retrieval confusion
+risk). Adversarial document pairs (e.g., mars_water_1 vs mars_water_2) have
+similarity ~0.71 — high enough to be co-retrieved in the same hop.
+
+### Leakage Check
+Ground truth answers in `test_cases.json` are NOT present verbatim in seed
+documents. For BASELINE cases, documents contain supporting facts but not
+pre-formed answers. For ADVERSARIAL cases, ground truths are behavioral
+expectations ("system must reject false premise") — not facts that can be
+directly retrieved.
+
+---
 
 ## 2. The Test Suite (`test_cases.json`)
 
@@ -68,6 +114,29 @@ Checks the `SharedContext` for any `PolicyViolation` objects of type `budget_ove
 ### 6. Critique Agreement (Weight: 10%)
 Measures the cohesion of the multi-agent system.
 - If Critique flags an error, but Synthesis ignores the flag and includes the exact verbatim span in the `final_answer` anyway, this score drops.
+
+### Why These Weights
+
+**Answer Correctness (30%)** is weighted highest because factual reliability
+is the primary user-facing requirement. A system that is well-cited but wrong
+is worse than a system that is right but poorly cited.
+
+**Contradiction Resolution (20%)** is second because unresolved contradictions
+cause the most trust damage in production. A final answer containing a flagged
+contradiction signals the system failed its core promise of synthesis quality.
+
+**Citation Accuracy and Tool Efficiency (15% each)** reflect production costs.
+Hallucinated citations (`[CHUNK:nonexistent]`) are expensive failures in any
+RAG system. Tool abuse (calling 15 tools when 3 suffice) directly increases
+latency and API cost.
+
+**Budget Compliance (10%)** measures architectural discipline. An agent that
+overflows its token budget signals a design flaw in context management, not
+just a content error.
+
+**Critique Agreement (10%)** ensures synthesis actually addressed critique's
+findings. A low score here means the critique agent is being ignored — a
+pipeline correctness failure, not just a quality issue.
 
 ---
 

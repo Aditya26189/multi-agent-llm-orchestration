@@ -10,6 +10,28 @@ make test
 make eval
 ```
 
+## Data Leakage Prevention
+
+1. **Generator ≠ Judge**: `gemini-2.0-flash` generates pipeline answers;
+   `gemini-1.5-flash` judges them in the evaluation harness. Different model
+   checkpoints reduce self-enhancement bias — the judge has not seen the
+   generator's training distribution.
+
+2. **Ground truth isolation**: `test_cases.json` ground truth answers are
+   never injected into the pipeline context. The pipeline receives only the
+   raw query. Scoring compares pipeline output to ground truth post-hoc,
+   not during generation.
+
+3. **Adversarial case design**: tc_11–tc_15 ground truths are behavioral
+   expectations ("reject injection", "correct false premise") — not retrievable
+   facts. There is no path by which the pipeline could "look up" the expected
+   behavior and fabricate a passing answer.
+
+4. **Seed doc boundaries**: Seed documents contain supporting facts (e.g.,
+   Einstein won Nobel for photoelectric effect) but not pre-formed answers
+   (e.g., they do not say "the correct answer to tc_12 is X"). The pipeline
+   must reason over retrieved chunks, not look up ground truth.
+
 ## Executive Summary
 
 | Key Numbers | Value |
