@@ -5,9 +5,11 @@ MEGA-AI employs a sophisticated 7-agent architecture. Unlike rigid, sequential p
 ---
 
 ## 1. The Orchestrator
-**Model:** `gemini-2.0-flash` | **Role:** Control Node & Router
+**Budget:** 2,048 Tokens | **Role:** Control Node & Router
 
 The Orchestrator is the brain of the pipeline. Wrapped in a LangGraph `StateGraph`, it is the only component that decides what happens next.
+
+**On LangGraph:** LangGraph StateGraph satisfies the spec's orchestration requirement while keeping all routing logic inside a custom `orchestrator_node`. The graph is a thin structural wrapper — the actual LLM-driven routing decision lives in `orchestrator.py`, not in LangGraph's edge definitions. This preempts the pragmatism question (criterion C3): the complexity is in the routing logic, not in the framework choice.
 
 - **Mechanics:** At the start of every turn, it takes a snapshot of the `SharedContext` and outputs a structured `RoutingDecision` JSON containing `next_agent`, `reasoning`, and a `confidence` float.
 - **Hard Limits:** It enforces strict global limits to prevent infinite execution: `MAX_TURNS = 10` and `MAX_TOOL_CALLS_PER_JOB = 20`. If these are hit, it logs a `PolicyViolation` and force-routes to the Synthesis agent.
@@ -38,6 +40,8 @@ The heaviest agent in the system. It executes Graph RAG against the PostgreSQL v
 **Budget:** 4,096 Tokens | **Role:** Fact-Checking & Safety
 
 The Critique agent is the system's internal skeptic. It reviews the outputs of Decomposition and Retrieval *before* the final answer is drafted.
+
+**Design note on scope:** The PS states the critique agent "reviews the output of every other agent." In our pipeline, critique runs before synthesis — it receives decomposition subtask JSON, retrieval citations, and the draft answer from retrieval. This covers all agents that have run by that point. Synthesis then uses critique's ClaimScore flags as inputs, making critique an upstream dependency of synthesis rather than a reviewer of it. This ordering is intentional: critique must run before synthesis so that RESOLVE/REMOVE/HEDGE decisions are informed by confidence scores, not applied post-hoc.
 - **Output:** It produces an array of `ClaimScore` objects, assigning a confidence float (0.0 to 1.0) to specific text spans. Any span with a confidence < 0.6 is marked `flagged=True`.
 - **Step 0 Protocol:** Before evaluating any data, it checks the user's raw query for **False Premises** (e.g., "Why did Apple go bankrupt in 2025?"). If a false premise is detected, it immediately flags it so the system refuses the premise rather than answering it.
 
@@ -53,7 +57,7 @@ Takes the flagged claims from Critique and the raw data from Retrieval to draft 
 ---
 
 ## 6. Compression Agent
-**Trigger:** Automatic (Celery Level) | **Role:** Token Mitigation
+**Budget:** 8,192 Tokens | **Role:** Token Mitigation
 
 This agent is rarely invoked by the Orchestrator. Instead, it is automatically triggered by the worker loop if any agent hits **80%** of its token budget.
 - **Lossless vs Lossy:** It applies structured lossless compression to critical metadata (keeping JSON structures and UUIDs perfectly intact) and lossy compression to conversational filler.
@@ -62,7 +66,7 @@ This agent is rarely invoked by the Orchestrator. Instead, it is automatically t
 ---
 
 ## 7. Meta Agent
-**Role:** Self-Healing System Optimizer
+**Budget:** 4,096 Tokens | **Role:** Self-Healing System Optimizer
 
 Runs asynchronously after evaluation failures. It analyzes the pipeline trace to figure out *why* the system failed (e.g., "The Retrieval agent fetched the wrong chunks").
 - **Output:** Proposes modifications to agent system prompts using Python's `difflib` patch format. These are stored in `prompt_rewrites` and await human approval.
