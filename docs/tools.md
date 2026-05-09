@@ -122,9 +122,9 @@ contradictions. Accesses local `SharedContext` only — no network call.
 
 | Condition | Error Code | ToolAction | Orchestrator Behaviour |
 |-----------|-----------|------------|----------------------|
-| Fewer than 2 prior outputs for agent | `NO_RESULTS` | Accepted | Synthesis proceeds (insufficient history) |
-| Agent ID not in context history | `REFLECTION_KEY_NOT_FOUND` | `SKIP_LOG_VIOLATION` | Skip, do not retry |
-| LLM call error | `EXEC_ERROR` | `FALLBACK_TOOL` | Route to orchestrator for rerouting |
+| Fewer than 2 prior outputs | NO_RESULTS | Accepted — synthesis proceeds |
+| Agent ID not in context | REFLECTION_KEY_NOT_FOUND | SKIP_LOG_VIOLATION, no retry |
+| LLM error | EXEC_ERROR | FALLBACK_TOOL — route to orchestrator |
 | No contradictions found | — (success) | — | `{"has_contradictions": false}` — synthesis proceeds |
 | Contradictions found | — (success) | — | `{"has_contradictions": true, "reflection": "..."}` — critique re-evaluates |
 

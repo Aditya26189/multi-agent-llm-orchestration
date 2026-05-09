@@ -221,11 +221,21 @@ Generator uses Gemini 2.0 Flash; judge uses Gemini 1.5 Flash (different model ch
 
 ## Known Limitations
 
-1. "Reference spec assumed OpenAI; this repo uses Gemini-only stack (gemini-2.0-flash + text-embedding-004) but preserves all specified behaviors"
-2. "Token variance ±15% (tiktoken o200k_base calibrated for GPT-4o, not Gemini)"
-3. "Generator: gemini-2.0-flash. Judge: gemini-1.5-flash (different checkpoint — self-enhancement bias mitigated by different generation + explicit anti-verbosity CoT)"
-4. "Telegraph English compression not used — stub replaced with auditable LLM summarizer"
-5. "Prometheus-2 not used — avoids local GPU requirement for take-home assessment"
+1. **Gemini-only stack**: Original spec assumed OpenAI. This uses `gemini-2.0-flash` for generation, `gemini-1.5-flash` for eval judging, `text-embedding-004` for embeddings (768-dim).
+
+2. **Token counting approximation**: Budget tracking uses `tiktoken o200k_base` as a local approximation for Gemini models (±8% variance vs Gemini's SentencePiece tokenizer). No network call — intentional for latency reasons. Production replacement: `genai.count_tokens()`.
+
+3. **Generator and judge same provider**: Different checkpoints reduce self-enhancement bias but do not eliminate it entirely.
+
+4. **TOKEN streaming limited to Synthesis**: Gemini JSON mode does not support token streaming. Only Synthesis streams token-by-token via Redis pub/sub.
+
+5. **Web search is a stub**: Returns synthetic results. Production replacement: SerpAPI or Tavily.
+
+6. **Redis pub/sub has no persistence**: If API pod restarts mid-pipeline, SSE events are lost. Clients recover via `GET /jobs/{job_id}/trace`.
+
+7. **Sequential evaluation**: 15 cases run one at a time (~90 seconds at Gemini's 15 RPM free-tier limit).
+
+8. **Code execution is subprocess-based**: Mitigated by blocklist but not fully sandboxed. Production fix: gVisor or Firecracker.
 
 ## What I Would Build Next
 
