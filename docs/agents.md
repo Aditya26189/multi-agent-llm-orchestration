@@ -76,6 +76,6 @@ Runs asynchronously after evaluation failures. It analyzes the pipeline trace to
 ## The Context Budget Manager
 
 MEGA-AI implements a highly secure, parallel-safe budget tracking system:
-- **Tokenizer:** It uses the `o200k_base` tokenizer (via `tiktoken`) to accurately approximate Gemini token consumption.
+- **Tokenizer:** It uses `genai.GenerativeModel.count_tokens()` to accurately calculate Gemini token consumption, incurring a small network latency per pre-flight check rather than relying on local approximation.
 - **Thread Safety:** Because Celery workers may execute subtasks asynchronously, the budget registry is protected by an `asyncio.Lock` to prevent race conditions during token counting.
 - **No Silent Truncation:** Unlike systems that silently drop messages when limits are reached, MEGA-AI explicitly raises a `BudgetOverflowError` and logs a `policy_violations` entry, guaranteeing that all token limits are fully auditable.

@@ -8,7 +8,7 @@ Raises BudgetOverflowError on overflow — NEVER silently truncates.
 """
 import asyncio
 from typing import Dict, Optional, TYPE_CHECKING
-import tiktoken
+import google.generativeai as genai
 from core.context import BudgetEntry, PolicyViolation, SharedContext, EventType
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ class ContextBudgetManager:
     Async-safe token budget manager.
     Tracks token usage per agent. Emits BUDGET_UPDATE SSE on every consume().
     Raises BudgetOverflowError on overflow — NEVER silently truncates.
-    Uses tiktoken o200k_base.
+    Uses genai.GenerativeModel.count_tokens().
     """
 
     DEFAULT_BUDGETS: Dict[str, int] = {
@@ -52,12 +52,15 @@ class ContextBudgetManager:
         self._context = context
         self._redis_pub = redis_pub
         self._lock = asyncio.Lock()  # MUST be asyncio.Lock, never threading.Lock
-        self._enc = tiktoken.get_encoding("o200k_base")
+        self._model = genai.GenerativeModel("models/gemini-2.0-flash")
 
     def _count(self, text_or_tokens: "str | int") -> int:
-        """Token count using tiktoken o200k_base."""
+        """Token count using genai."""
         if isinstance(text_or_tokens, str):
-            return max(1, len(self._enc.encode(text_or_tokens)))
+            try:
+                return max(1, self._model.count_tokens(text_or_tokens).total_tokens)
+            except Exception:
+                return max(1, len(text_or_tokens) // 4)
         return text_or_tokens
 
     def declare_budget(self, agent_id: str, max_tokens: int) -> None:

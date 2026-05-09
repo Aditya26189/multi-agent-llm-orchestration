@@ -19,7 +19,6 @@ celery>=5.4.0
 
 # LLM — Gemini only
 google-generativeai>=0.8.0
-tiktoken>=0.7.0
 langgraph>=0.0.39
 
 # Logging
