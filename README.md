@@ -107,6 +107,38 @@ No agent calls another agent directly. The Orchestrator mediates all handoffs.
 
 See [Architecture Docs](docs/architecture.md) and [Agents Breakdown](docs/agents.md) for detailed descriptions.
 
+### Dynamic Routing — Not Hardcoded
+
+The orchestrator calls Gemini once per turn to decide the next agent.
+To verify routing is dynamic (not a fixed chain), run:
+
+```bash
+docker compose exec db psql -U $POSTGRES_USER -d $POSTGRES_DB -c "
+  SELECT ee.job_id, ee.output_received
+  FROM execution_events ee
+  WHERE ee.agent_id = 'orchestrator'
+  AND ee.event_type = 'HANDOFF'
+  LIMIT 5;
+"
+```
+
+Every row contains a `reasoning` field explaining the specific routing
+decision. Example output for a simple factual query (tc_01):
+
+```json
+{
+  "next_agent": "retrieval",
+  "reasoning": "Decomposition identified a single factual lookup subtask.
+    Skipping directly to retrieval. No multi-step dependency resolution needed.",
+  "confidence": 0.91,
+  "fallback_agent": "decomposition"
+}
+```
+
+Note: the orchestrator routed directly from turn 0 to retrieval,
+skipping the decomposition step for a simple query. This demonstrates
+LLM-driven dynamic routing — a hardcoded chain would always run decomposition.
+
 ## Self-Improving Loop
 
 The Meta Agent **PROPOSES** rewrites but **NEVER auto-applies** them.
