@@ -54,9 +54,9 @@ Format:
 
 VECTOR_SEARCH_SQL = """
 SELECT id, content, source_url,
-       1 - (embedding <=> :emb::vector) AS relevance
+       1 - (embedding <=> :emb::vector(768)) AS relevance
 FROM document_chunks
-ORDER BY embedding <=> :emb::vector
+ORDER BY embedding <=> :emb::vector(768)
 LIMIT :limit
 """
 
@@ -88,7 +88,7 @@ class RetrievalAgent(BaseAgent):
         chunks = []
         for row in rows.mappings().all():
             chunks.append(Chunk(
-                id=str(row["id"])[:8],
+                id=str(row["id"]),
                 text=row["content"],
                 source_url=row.get("source_url") or "unknown",
                 relevance_score=max(0.0, min(1.0, float(row["relevance"]))),
@@ -152,9 +152,32 @@ class RetrievalAgent(BaseAgent):
         )
         await budget_mgr.consume("retrieval", prompt_hop2)
 
-        hop2_response = await self.stream_response(
-            prompt_hop2, context, redis_pub, "retrieval"
+        # ── HOP 2 — with token streaming ────────────────────────────────────────────
+        from core.rate_limiter import wait as rate_wait
+        rate_wait()
+        stream_config = genai.GenerationConfig(temperature=0.0)
+        # Note: hop-2 uses FREE TEXT mode (not JSON), so stream=True works here.
+        # hop-1 uses JSON mode and cannot stream — that is correct.
+        response_stream = await asyncio.to_thread(
+            self._model.generate_content,
+            prompt_hop2,
+            generation_config=stream_config,
+            stream=True,
         )
+
+        hop2_text = ""
+        for chunk in response_stream:
+            token_text = chunk.text if hasattr(chunk, "text") and chunk.text else ""
+            if token_text:
+                hop2_text += token_text
+                # Publish TOKEN event to Redis → SSE client sees retrieval streaming
+                if redis_pub is not None:
+                    await redis_pub.publish(context.job_id, {
+                        "event_type": "TOKEN",
+                        "agent_id": "retrieval",
+                        "token": token_text,
+                    })
+        hop2_response = hop2_text
         latency = (time.monotonic() - start) * 1000
 
         # ── Parse citations into provenance_map ────────────────────────────────
