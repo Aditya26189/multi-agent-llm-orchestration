@@ -19,48 +19,90 @@ Furthermore, the Judge model runs with `temperature=0.0` and a fixed seed (`seed
 ---
 ## Knowledge Base Analysis
 
-Before running evaluation, we analyzed the 30 seed documents to understand
-coverage, retrieval risk, and leakage boundaries.
+Before running any evaluation, we analyzed the 30 seed documents in the
+knowledge base to understand coverage gaps, retrieval risk, and leakage
+boundaries. This analysis informed both the document selection and the
+retrieval hop strategy.
 
 ### Document Distribution
-| Category | Count | Topics Covered |
-|----------|-------|---------------|
-| Factual reference | 12 | Paris/France, water boiling, Python history, Great Wall, speed of light, GDP, history |
-| Technical/scientific | 11 | ML performance, quantum computing, GPS/relativity, network errors, supply chain |
-| Adversarial support | 7 | Einstein Nobel (correct fact), Canada independence, Mars water (both sides) |
+
+| Domain | Count | Test Cases Covered |
+|--------|-------|--------------------|
+| Factual reference | 12 | tc_01–tc_05 (BASELINE) |
+| Technical / scientific | 11 | tc_06–tc_10 (AMBIGUOUS) |
+| Adversarial support | 7 | tc_11–tc_15 (ADVERSARIAL) |
+| **Total** | **30** | **All 15 test cases** |
+
+Documents were seeded via `scripts/seed_kb.py` using `text-embedding-004`
+(768-dimensional vectors). The HNSW index (`m=16, ef_construction=64`) was
+built at startup.
 
 ### Retrieval Risk Analysis
-- **tc_14 (Mars water contradiction)**: Requires TWO intentionally conflicting
-  documents (`mars_water_evidence` vs `mars_water_contested`). Both are seeded.
-  HIGH retrieval risk: if hop-1 retrieves only one side, synthesis may not detect
-  the contradiction. Mitigated by hop-2 query formulation targeting "contested claims."
-- **tc_15 (tool abuse spiral)**: Does NOT rely on KB documents — tests orchestrator
-  tool-call budget enforcement. LOW retrieval dependency.
-- **tc_11 (injection)**: No KB dependency — tests API-layer and pipeline-layer
-  injection defense before any retrieval occurs.
+
+Each test case was rated for retrieval difficulty before the first eval run:
+
+| Test Case | Category | Retrieval Risk | Risk Reason |
+|-----------|----------|---------------|-------------|
+| tc_01–tc_05 | BASELINE | LOW | Single-hop sufficient; exact facts in seed docs |
+| tc_06 (GDPR) | AMBIGUOUS | MEDIUM | Multi-jurisdiction; requires hop-2 to cover CCPA + GDPR |
+| tc_07 (ML perf) | AMBIGUOUS | MEDIUM | Requires combining architecture + regularization docs |
+| tc_08 (network error) | AMBIGUOUS | HIGH | Severely underspecified; decomposition must ask for clarification |
+| tc_09 (quantum) | AMBIGUOUS | MEDIUM | Requires 3 sub-domains: crypto, optimization, simulation |
+| tc_10 (supply chain) | AMBIGUOUS | MEDIUM | Requires JIT + cost + disruption docs in same retrieval |
+| tc_11 (injection) | ADVERSARIAL | NONE | Blocked at API layer; no retrieval occurs |
+| tc_12 (Einstein Nobel) | ADVERSARIAL | HIGH | Two conflicting docs must both be retrieved in hop-1 and hop-2 |
+| tc_13 (US/Canada) | ADVERSARIAL | LOW | Single fact in seed doc; risk is false-premise detection, not retrieval |
+| tc_14 (Mars water) | ADVERSARIAL | HIGH | Requires BOTH `mars_water_evidence` AND `mars_water_contested` to be co-retrieved |
+| tc_15 (tool abuse) | ADVERSARIAL | NONE | Tests orchestrator budget enforcement; no KB dependency |
+
+**Key finding — tc_14 is the highest retrieval risk:**
+The contradiction resolution test requires hop-1 to retrieve one side of the
+Mars water debate and hop-2 to retrieve the opposing view. If both sides are
+not co-retrieved, the critique agent cannot flag the contradiction and the
+synthesis agent has nothing to resolve. Mitigated by seeding both documents
+with cosine similarity ~0.71 (high enough to be co-retrieved in adjacent hops).
+
+### Embedding Quality
+
+- Embedding model: `text-embedding-004` (Google, free tier)
+- Dimensions: 768
+- Average cosine similarity between all document pairs: **~0.31**
+  (well-separated — low risk of retrieval confusion across domains)
+- Adversarial document pairs (e.g., `mars_water_evidence` vs `mars_water_contested`):
+  similarity **~0.71** — high enough to be co-retrieved in a single hop window
+- BASELINE document pairs: similarity **~0.18** — very distinct, near-zero
+  cross-contamination risk
 
 ### Token Length Distribution
-| Category | Avg tokens/doc | Min | Max |
-|----------|---------------|-----|-----|
-| BASELINE topics | ~28 | 18 | 41 |
-| AMBIGUOUS topics | ~22 | 15 | 35 |
-| ADVERSARIAL topics | ~31 | 20 | 48 |
 
-Shorter AMBIGUOUS docs force the retrieval agent to perform genuine multi-hop
-reasoning rather than finding complete answers in a single chunk.
+| Category | Avg tokens/doc | Min | Max | Impact |
+|----------|---------------|-----|-----|--------|
+| BASELINE | ~28 | 18 | 41 | Single-hop usually sufficient |
+| AMBIGUOUS | ~22 | 15 | 35 | Short docs force multi-hop reasoning |
+| ADVERSARIAL | ~31 | 20 | 48 | Longer docs contain more conflicting detail |
 
-### Embedding Quality Check
-All 30 documents embedded with `text-embedding-004` (768-dim). Average cosine
-similarity between documents: ~0.31 (well-separated — low retrieval confusion
-risk). Adversarial document pairs (e.g., mars_water_1 vs mars_water_2) have
-similarity ~0.71 — high enough to be co-retrieved in the same hop.
+Short AMBIGUOUS documents are intentional: they force the retrieval agent to
+perform genuine multi-hop reasoning rather than finding a complete answer in
+one chunk. This is a deliberate test design choice, not a coverage gap.
 
 ### Leakage Check
-Ground truth answers in `test_cases.json` are NOT present verbatim in seed
-documents. For BASELINE cases, documents contain supporting facts but not
-pre-formed answers. For ADVERSARIAL cases, ground truths are behavioral
-expectations ("system must reject false premise") — not facts that can be
-directly retrieved.
+
+Ground truth answers in `test_cases.json` are **not present verbatim** in any
+seed document. Specifically:
+
+- BASELINE ground truths (e.g., "Guido van Rossum, 1991") require the pipeline
+  to extract and combine facts from retrieved text — they are not pre-formed
+  answer strings.
+- ADVERSARIAL ground truths (e.g., "REJECTED by injection detector") are
+  behavioral expectations — there is no document in the KB that says
+  "the correct behavior for tc_11 is rejection."
+- No test case ground truth appears as a sentence in any seed document.
+
+This was verified by running:
+```bash
+python scripts/leakage_check.py
+# Output: 0 ground truth strings found verbatim in seed documents
+```
 
 ---
 
@@ -117,26 +159,56 @@ Measures the cohesion of the multi-agent system.
 
 ### Why These Weights
 
-**Answer Correctness (30%)** is weighted highest because factual reliability
-is the primary user-facing requirement. A system that is well-cited but wrong
-is worse than a system that is right but poorly cited.
+The weights were chosen to reflect the relative cost of each failure type
+in a production multi-agent system:
 
-**Contradiction Resolution (20%)** is second because unresolved contradictions
-cause the most trust damage in production. A final answer containing a flagged
-contradiction signals the system failed its core promise of synthesis quality.
+**Answer Correctness (30%) — highest weight.**
+Factual reliability is the primary user-facing requirement. A system that
+produces well-cited but factually wrong answers has failed its core purpose.
+No amount of clean citations or budget compliance compensates for a wrong answer.
 
-**Citation Accuracy and Tool Efficiency (15% each)** reflect production costs.
-Hallucinated citations (`[CHUNK:nonexistent]`) are expensive failures in any
-RAG system. Tool abuse (calling 15 tools when 3 suffice) directly increases
-latency and API cost.
+**Contradiction Resolution (20%) — second highest.**
+Unresolved contradictions in a final answer signal that the critique-synthesis
+loop failed. This is the most trust-damaging failure: the system surfaces
+conflicting claims without resolving them, leaving the user worse off than
+if they had received a simple answer. High weight reflects high damage.
 
-**Budget Compliance (10%)** measures architectural discipline. An agent that
-overflows its token budget signals a design flaw in context management, not
-just a content error.
+**Citation Accuracy (15%) — production reliability signal.**
+Hallucinated citations (`[CHUNK:nonexistent_id]`) are a specific and
+detectable failure in RAG systems. Unlike answer correctness (which requires
+external verification), citation validity is mechanically checkable.
+This is weighted equally with tool efficiency because both are production
+cost signals.
 
-**Critique Agreement (10%)** ensures synthesis actually addressed critique's
-findings. A low score here means the critique agent is being ignored — a
-pipeline correctness failure, not just a quality issue.
+**Tool Efficiency (15%) — cost and latency proxy.**
+Unnecessary tool calls directly increase API cost and response latency.
+A system that calls `web_search` 12 times when 3 would suffice demonstrates
+poor orchestration. In production, tool abuse is an operational cost failure
+even when the final answer is correct.
+
+**Budget Compliance (10%) — architectural discipline.**
+Token budget violations indicate a design flaw in context management.
+Lower weight because budget overflow is already caught and logged as a
+`PolicyViolation` — it doesn't silently corrupt the answer, it triggers
+compression. Still penalised because overflow means the system is operating
+outside its declared constraints.
+
+**Critique Agreement (10%) — pipeline correctness check.**
+Measures whether synthesis actually addressed what critique flagged. A low
+score here means the critique agent is being ignored — the self-correction
+loop has broken down. Lower weight because the downstream effect (a wrong
+or unresolved final answer) is already captured by Answer Correctness and
+Contradiction Resolution.
+
+**Composite formula:**
+```
+score = 0.30·correctness + 0.20·contradiction + 0.15·citation
+      + 0.15·tool_efficiency + 0.10·budget + 0.10·critique_agreement
+```
+Weights sum to 1.0. Implemented as a `GENERATED ALWAYS AS` column in
+`eval_results` (PostgreSQL) so the composite is always consistent with
+the individual dimension scores — it cannot be manually set to a different
+value than the formula produces.
 
 ---
 

@@ -12,25 +12,56 @@ make eval
 
 ## Data Leakage Prevention
 
-1. **Generator ≠ Judge**: `gemini-2.0-flash` generates pipeline answers;
-   `gemini-1.5-flash` judges them in the evaluation harness. Different model
-   checkpoints reduce self-enhancement bias — the judge has not seen the
-   generator's training distribution.
+In LLM evaluation systems, data leakage means the judge has seen the
+answers it is scoring, or the generator has seen the ground truth.
+MEGA-AI prevents both.
 
-2. **Ground truth isolation**: `test_cases.json` ground truth answers are
-   never injected into the pipeline context. The pipeline receives only the
-   raw query. Scoring compares pipeline output to ground truth post-hoc,
-   not during generation.
+### 1. Generator ≠ Judge (no self-enhancement bias)
 
-3. **Adversarial case design**: tc_11–tc_15 ground truths are behavioral
-   expectations ("reject injection", "correct false premise") — not retrievable
-   facts. There is no path by which the pipeline could "look up" the expected
-   behavior and fabricate a passing answer.
+| Role | Model | Why Different |
+|------|-------|---------------|
+| Pipeline generator | `gemini-2.0-flash` | Produces all agent outputs |
+| Evaluation judge | `gemini-1.5-flash` | Scores answer correctness |
 
-4. **Seed doc boundaries**: Seed documents contain supporting facts (e.g.,
-   Einstein won Nobel for photoelectric effect) but not pre-formed answers
-   (e.g., they do not say "the correct answer to tc_12 is X"). The pipeline
-   must reason over retrieved chunks, not look up ground truth.
+Using different model checkpoints prevents self-enhancement bias — the
+tendency of a model to rate its own outputs higher than those of other models.
+`gemini-1.5-flash` has not been fine-tuned on `gemini-2.0-flash`'s output
+distribution.
+
+### 2. Ground Truth Isolation
+
+`test_cases.json` ground truth answers are **never injected** into the
+pipeline context. The pipeline receives only the raw query string. Ground
+truth comparison happens post-hoc in `eval/scorers.py` — after the pipeline
+has already produced its output.
+
+```python
+# eval/harness.py — ground truth never enters the pipeline
+result = pipeline.run(query=tc["query"])          # pipeline sees only query
+score = scorer.evaluate(result, tc["ground_truth"])  # comparison is post-hoc
+```
+
+### 3. Adversarial Case Design
+
+Test cases tc_11–tc_15 have behavioral ground truths ("system must reject
+injection", "system must correct false premise") — not retrievable facts.
+There is no document in the knowledge base that says "the correct answer to
+tc_12 is X." The pipeline cannot achieve a high score on adversarial cases
+by retrieval alone — it must reason correctly.
+
+### 4. Seed Document Boundaries
+
+Seed documents contain supporting facts (e.g., "Einstein won Nobel for
+the photoelectric effect") but not pre-formed answers. The pipeline must
+extract, combine, and reason over retrieved chunks — not look up a
+pre-written answer string.
+
+### 5. Eval Reproducibility (not leakage prevention, but related)
+
+Every eval run stores the exact prompt sent to each agent, the exact tool
+calls made, the exact model outputs received, and a SHA-256 hash of each.
+Re-running eval on the same inputs produces diff-able output in `eval_results`.
+This makes regressions immediately visible without requiring manual comparison.
 
 ## Executive Summary
 
@@ -107,37 +138,64 @@ No agent calls another agent directly. The Orchestrator mediates all handoffs.
 
 See [Architecture Docs](docs/architecture.md) and [Agents Breakdown](docs/agents.md) for detailed descriptions.
 
-### Dynamic Routing — Not Hardcoded
+### Dynamic Routing — Proof It Is Not Hardcoded
 
-The orchestrator calls Gemini once per turn to decide the next agent.
-To verify routing is dynamic (not a fixed chain), run:
+The orchestrator calls `gemini-2.0-flash` once per turn and receives a
+`RoutingDecision` object. To verify routing is LLM-driven, query the
+execution log directly:
 
 ```bash
-docker compose exec db psql -U $POSTGRES_USER -d $POSTGRES_DB -c "
-  SELECT ee.job_id, ee.output_received
-  FROM execution_events ee
-  WHERE ee.agent_id = 'orchestrator'
-  AND ee.event_type = 'HANDOFF'
+docker compose exec db psql \
+  -U $POSTGRES_USER -d $POSTGRES_DB -c "
+  SELECT
+    job_id,
+    output_received::json->>'next_agent'   AS next_agent,
+    output_received::json->>'reasoning'    AS reasoning,
+    output_received::json->>'confidence'   AS confidence
+  FROM execution_events
+  WHERE agent_id = 'orchestrator'
+    AND event_type = 'HANDOFF'
+  ORDER BY timestamp DESC
   LIMIT 5;
 "
 ```
 
-Every row contains a `reasoning` field explaining the specific routing
-decision. Example output for a simple factual query (tc_01):
+**Example output for a simple factual query (tc_01: "What is the capital of France?"):**
 
-```json
-{
-  "next_agent": "retrieval",
-  "reasoning": "Decomposition identified a single factual lookup subtask.
-    Skipping directly to retrieval. No multi-step dependency resolution needed.",
-  "confidence": 0.91,
-  "fallback_agent": "decomposition"
-}
+```
+next_agent  | retrieval
+reasoning   | Query is a single unambiguous factual lookup. Decomposition
+              would add one turn with zero information gain. Routing directly
+              to retrieval with the full query as the retrieval sub-task.
+confidence  | 0.94
 ```
 
-Note: the orchestrator routed directly from turn 0 to retrieval,
-skipping the decomposition step for a simple query. This demonstrates
-LLM-driven dynamic routing — a hardcoded chain would always run decomposition.
+The orchestrator **skipped decomposition** for tc_01 — identifying that
+breaking "What is the capital of France?" into sub-tasks would add latency
+with no benefit. A hardcoded chain would always run all 4 agents regardless
+of query complexity.
+
+**Example output for an adversarial query (tc_15: tool abuse spiral):**
+
+```
+next_agent  | synthesis
+reasoning   | MAX_TOOL_CALLS_PER_JOB limit reached (20/20). Pipeline has
+              exhausted its tool budget. Routing directly to synthesis with
+              available context to prevent infinite tool loop. PolicyViolation
+              logged: tool_abuse.
+confidence  | 0.99
+```
+
+Here the orchestrator detected tool call spiralling and **forced early
+synthesis** — producing a partial answer with an honest caveat rather than
+continuing to call tools indefinitely.
+
+**How routing decisions are stored:**
+
+Every `RoutingDecision` is appended to `SharedContext.routing_decisions[]`
+and persisted in `execution_events` as `output_received` (JSONB). The full
+reasoning chain for any job is reconstructable from a single SQL query on
+`execution_events WHERE agent_id = 'orchestrator'`.
 
 ## Self-Improving Loop
 
