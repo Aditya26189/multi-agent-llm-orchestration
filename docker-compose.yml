@@ -24,7 +24,7 @@ services:
       sh -c "
         echo 'Waiting for DB...' &&
         sleep 5 &&
-        alembic upgrade head &&
+        PYTHONPATH=/app alembic upgrade head &&
         python scripts/seed_kb.py &&
         echo 'Seeding complete.'
       "
@@ -89,7 +89,8 @@ services:
     build:
       context: .
       dockerfile: worker/Dockerfile
-    command: celery -A worker.celery_app worker --loglevel=info -Q heavy_tasks --concurrency=4
+    command: >
+      sh -c "PYTHONPATH=/app celery -A worker.celery_app worker --loglevel=info -Q heavy_tasks --concurrency=4"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}

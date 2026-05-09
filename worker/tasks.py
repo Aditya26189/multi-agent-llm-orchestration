@@ -60,7 +60,7 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
     async with AsyncSessionLocal() as db:
         agents = {
             AgentID.DECOMPOSITION: DecompositionAgent(),
-            AgentID.RETRIEVAL:     RetrievalAgent(db),
+            AgentID.RETRIEVAL:     RetrievalAgent(),
             AgentID.CRITIQUE:      CritiqueAgent(),
             AgentID.SYNTHESIS:     SynthesisAgent(),
             AgentID.COMPRESSION:   compression_agent,
@@ -77,7 +77,7 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
             )
             
             # Run LangGraph pipeline synchronously as required by Celery context
-            final_state = pipeline.invoke(context)
+            final_state = await pipeline.ainvoke(context)
 
             # Auto-trigger compression if any agent near budget limit
             for agent_id, entry in budget_mgr.get_registry().items():
@@ -133,6 +133,7 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
                 "job_id": final_state.job_id,
                 "status": "done",
                 "final_answer": final_state.final_answer,
+                "context": final_state,
             }
 
         except Exception as e:
@@ -149,6 +150,12 @@ async def _save_context_to_db(context: SharedContext) -> None:
     """Persist full context to PostgreSQL for trace reconstruction."""
     from db.session import AsyncSessionLocal
     from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+    engine = create_async_engine(DB_URL)
+    AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     from core.cost import CostCalculator
     cost_calc = CostCalculator()
@@ -176,7 +183,7 @@ async def _save_context_to_db(context: SharedContext) -> None:
             "jid": context.job_id,
             "q": context.query,
             "s": context.status.value,
-            "tok": sum(e.used_tokens for e in context.budget_registry.values()),
+            "tok": sum(e.token_count for e in context.execution_events),
             "cost": total_cost,
             "model": "gemini-2.0-flash",
         })
@@ -233,6 +240,24 @@ async def _save_context_to_db(context: SharedContext) -> None:
             except Exception:
                 continue
 
+        # Insert routing decisions
+        for rd in context.routing_decisions:
+            try:
+                await db.execute(text("""
+                    INSERT INTO routing_decisions
+                    (job_id, turn, next_agent, reasoning, confidence, timestamp)
+                    VALUES (:jid, :turn, :na, :rea, :conf, :ts)
+                """), {
+                    "jid": context.job_id,
+                    "turn": context.turn,
+                    "na": rd.next_agent.value if hasattr(rd.next_agent, "value") else rd.next_agent,
+                    "rea": rd.reasoning,
+                    "conf": rd.confidence,
+                    "ts": rd.decided_at,
+                })
+            except Exception:
+                continue
+
         # Insert policy violations
         for v in context.violations:
             try:
@@ -253,3 +278,4 @@ async def _save_context_to_db(context: SharedContext) -> None:
                 continue
 
         await db.commit()
+    await engine.dispose()

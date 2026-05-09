@@ -1,5 +1,5 @@
 """
-Seed script — embeds 30 documents using Gemini text-embedding-004
+Seed script — embeds 30 documents using Gemini embedding models
 and inserts them into the document_chunks table.
 
 Uses task_type="retrieval_document" for seeding (spec requirement).
@@ -16,8 +16,11 @@ import uuid
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import google.generativeai as genai
-from sqlalchemy import text
+from google import genai
+from google.genai import types
+from sqlalchemy import text, bindparam
+
+EMBEDDING_MODEL = "gemini-embedding-001"
 
 SEED_DOCUMENTS = [
     # BASELINE coverage (10 docs)
@@ -64,7 +67,7 @@ async def seed() -> None:
         print("ERROR: GOOGLE_API_KEY not set")
         sys.exit(1)
 
-    genai.configure(api_key=api_key)
+    client = genai.Client(api_key=api_key)
 
     from db.session import AsyncSessionLocal
 
@@ -90,20 +93,24 @@ async def seed() -> None:
             print(f"  Embedding: {doc['source_url']} ...", end=" ", flush=True)
             try:
                 result = await asyncio.to_thread(
-                    genai.embed_content,
-                    model="models/text-embedding-004",
-                    content=doc["content"],
-                    task_type="retrieval_document",
+                    client.models.embed_content,
+                    model=EMBEDDING_MODEL,
+                    contents=doc["content"],
+                    config=types.EmbedContentConfig(
+                        task_type="RETRIEVAL_DOCUMENT",
+                        output_dimensionality=768,
+                    ),
                 )
-                embedding = result["embedding"]
+                embedding = result.embeddings[0].values
                 emb_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
+                insert_stmt = text("""
+                    INSERT INTO document_chunks (id, content, embedding, source_url)
+                    VALUES (:id, :content, CAST(:emb AS vector), :src)
+                    ON CONFLICT DO NOTHING
+                """).bindparams(bindparam("emb"))
                 await db.execute(
-                    text("""
-                        INSERT INTO document_chunks (id, content, embedding, source_url)
-                        VALUES (:id, :content, :emb::vector, :src)
-                        ON CONFLICT DO NOTHING
-                    """),
+                    insert_stmt,
                     {
                         "id": str(uuid.uuid4()),
                         "content": doc["content"],

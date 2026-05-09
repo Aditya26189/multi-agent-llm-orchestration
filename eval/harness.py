@@ -36,7 +36,7 @@ class EvaluationHarness:
         # Judge model — different checkpoint from generator (anti-self-enhancement bias)
         self.judge_model = genai.GenerativeModel(JUDGE_MODEL)
 
-    async def run_all(self, failed_case_ids: list = None) -> dict:
+    async def run_all(self, failed_case_ids: list = None, rewrite_id: str = None) -> dict:
         """
         Run all 15 test cases (or subset of failed ones).
         Stores results in PostgreSQL with full reproducibility.
@@ -66,7 +66,7 @@ class EvaluationHarness:
         total = sum(r["composite_score"] for r in results) / len(results) if results else 0.0
         print(f"\n=== Total Score: {total:.4f} ===\n")
 
-        await self._store_run(run_id, results, total)
+        await self._store_run(run_id, results, total, rewrite_id)
         return {"run_id": run_id, "total_score": total, "results": results}
 
     async def _run_single(self, tc: dict, run_id: str) -> dict:
@@ -76,10 +76,20 @@ class EvaluationHarness:
         if tc.get("adversarial_type") == "prompt_injection":
             injection = detect_injection(tc["query"])
             final_answer = "REJECTED: prompt injection detected." if injection.is_injection else tc["query"]
+            from core.context import SharedContext
             context = SharedContext(query=tc["query"])
         else:
-            context = SharedContext(query=tc["query"])
-            final_answer = await self._run_pipeline_for_eval(tc["query"], context)
+            from worker.tasks import _run_pipeline_async
+            
+            # Apply approved rewrites before running the pipeline
+            from db.session import AsyncSessionLocal
+            from agents.overrides import apply_approved_prompt_rewrites
+            async with AsyncSessionLocal() as db:
+                await apply_approved_prompt_rewrites(db)
+                
+            res = await _run_pipeline_async(tc["query"], str(uuid.uuid4()))
+            context = res["context"]
+            final_answer = res["final_answer"]
 
         # Score all 6 dimensions
         s_correct, j_correct = score_answer_correctness(
@@ -137,7 +147,7 @@ class EvaluationHarness:
         except Exception as e:
             return f"Eval pipeline error: {str(e)}"
 
-    async def _store_run(self, run_id: str, results: list, total: float) -> None:
+    async def _store_run(self, run_id: str, results: list, total: float, rewrite_id: str = None) -> None:
         from db.session import AsyncSessionLocal
         from sqlalchemy import text
 
@@ -163,4 +173,30 @@ class EvaluationHarness:
                     "j": json.dumps(r["justifications"]),
                     "fa": r["final_answer"],
                 })
+            
+            if rewrite_id:
+                # Calculate delta score
+                # Fetch prev run id for this rewrite from failure_cases, or just average
+                rewrite = await db.execute(text("SELECT failure_cases FROM prompt_rewrites WHERE rewrite_id = :id"), {"id": rewrite_id})
+                row = rewrite.first()
+                if row and row[0]:
+                    try:
+                        failure_cases = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                        tc_ids = [c["test_case_id"] for c in failure_cases]
+                        # get avg from old run for these test cases
+                        old_avg_res = await db.execute(text("""
+                            SELECT AVG(composite_score) FROM eval_results
+                            WHERE test_case_id = ANY(:ids) AND run_id != :rid
+                        """), {"ids": tc_ids, "rid": run_id})
+                        old_avg = old_avg_res.scalar() or 0.0
+                        delta = total - old_avg
+                        
+                        await db.execute(text("""
+                            UPDATE prompt_rewrites 
+                            SET delta_score = :d 
+                            WHERE rewrite_id = :id
+                        """), {"d": json.dumps({"delta": delta}), "id": rewrite_id})
+                    except Exception as e:
+                        print(f"Error computing delta: {e}")
+                        
             await db.commit()

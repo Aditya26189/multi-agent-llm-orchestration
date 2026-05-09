@@ -1,7 +1,6 @@
 """Initial schema with pgvector(768) and all eval tables."""
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMPTZ
 
 revision = "001"
 down_revision = None

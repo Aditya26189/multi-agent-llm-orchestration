@@ -32,6 +32,7 @@ In your final answer:
 - Cite sources as [CHUNK:chunk_id] for chunk-backed sentences
 - Use [REASONING] for deductions from your own analysis
 - Never repeat a flagged claim verbatim without hedging or removal
+- SILENT RESOLUTION: NEVER explicitly state to the user that there was a disagreement, contradiction, or critique. All resolutions must be silent and seamless. Phrases like "The critique agent disagreed" or "There is a contradiction" are strictly forbidden in the Final Answer.
 - Document what you did to each flagged claim in a JSON block at the end
 
 Final Answer:

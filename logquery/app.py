@@ -64,10 +64,66 @@ def trace():
 def api_trace(job_id):
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT * FROM execution_events WHERE job_id = %s ORDER BY seq", (job_id,))
+    
+    query = """
+        SELECT id, job_id, 'execution_event' AS source_table, event_type AS action,
+               timestamp, agent_id, latency_ms, token_count
+        FROM execution_events
+        WHERE job_id = %s
+        
+        UNION ALL
+        
+        SELECT id, job_id, 'routing_decision' AS source_table, 'ROUTE_TO_' || next_agent AS action,
+               timestamp, 'orchestrator' AS agent_id, 0 AS latency_ms, 0 AS token_count
+        FROM routing_decisions
+        WHERE job_id = %s
+        
+        UNION ALL
+        
+        SELECT id, job_id, 'tool_call' AS source_table, 'TOOL_CALL_' || tool_name AS action,
+               timestamp, agent_id, latency_ms, 0 AS token_count
+        FROM tool_calls
+        WHERE job_id = %s
+        
+        ORDER BY timestamp ASC
+    """
+    
+    cur.execute(query, (job_id, job_id, job_id))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return jsonify(rows)
+
+@app.route("/rewrites")
+def list_rewrites():
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM prompt_rewrites ORDER BY proposed_at DESC")
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+@app.route("/eval/compare")
+def eval_compare():
+    run_id_1 = request.args.get("run1")
+    run_id_2 = request.args.get("run2")
+    if not run_id_1 or not run_id_2:
+        return jsonify({"error": "Missing run1 or run2 param"}), 400
+        
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    
+    query = """
+        SELECT r1.test_case_id, r1.composite_score AS score1, r2.composite_score AS score2,
+               (r2.composite_score - r1.composite_score) AS diff
+        FROM eval_results r1
+        JOIN eval_results r2 ON r1.test_case_id = r2.test_case_id
+        WHERE r1.run_id = %s AND r2.run_id = %s
+    """
+    cur.execute(query, (run_id_1, run_id_2))
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return jsonify(rows)
+
 
 
 if __name__ == "__main__":

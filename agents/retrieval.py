@@ -11,7 +11,8 @@ import os
 import time
 from typing import List, Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,39 +63,47 @@ LIMIT :limit
 
 
 class RetrievalAgent(BaseAgent):
-    def __init__(self, db: AsyncSession):
+    def __init__(self):
         super().__init__()
-        self._db = db
+        self._db_url = os.environ["DATABASE_URL"]
 
     async def _embed(self, text: str) -> List[float]:
-        """Gemini text-embedding-004 with retrieval_query task type."""
+        """Gemini embedding model with retrieval_query task type."""
+        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
         result = await asyncio.to_thread(
-            genai.embed_content,
-            model="models/text-embedding-004",
-            content=text,
-            task_type="retrieval_query",
+            client.models.embed_content,
+            model="gemini-embedding-001",
+            contents=text,
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY",
+                output_dimensionality=768,
+            ),
         )
-        return result["embedding"]
+        return result.embeddings[0].values
 
-    async def _vector_search(self, query_text: str, limit: int = 5, hop: int = 1) -> List[Chunk]:
-        """Embed query, search pgvector, return Chunk objects."""
-        embedding = await self._embed(query_text)
-        emb_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    async def _vector_search(self, query: str, limit: int = 5, hop: int = 1):
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
-        rows = await self._db.execute(
-            text(VECTOR_SEARCH_SQL),
-            {"emb": emb_str, "limit": limit},
-        )
-        chunks = []
-        for row in rows.mappings().all():
-            chunks.append(Chunk(
-                id=str(row["id"]),
-                text=row["content"],
-                source_url=row.get("source_url") or "unknown",
-                relevance_score=max(0.0, min(1.0, float(row["relevance"]))),
-                hop_number=hop,
-            ))
-        return chunks
+        engine = create_async_engine(self._db_url)
+        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+        embedding = await self._embed(query)
+        emb_literal = "[" + ",".join(str(x) for x in embedding) + "]"
+
+        sql = f"""
+            SELECT id, content, source_url,
+                1 - (embedding <=> '{emb_literal}'::vector(768)) AS relevance
+            FROM document_chunks
+            ORDER BY embedding <=> '{emb_literal}'::vector(768)
+            LIMIT :limit
+        """
+        async with session_factory() as db:
+            rows = await db.execute(text(sql), {"limit": limit})
+            result = rows.fetchall()
+
+        await engine.dispose()
+        return result
 
     async def run(
         self,
@@ -120,7 +129,7 @@ class RetrievalAgent(BaseAgent):
             return
 
         chunks_text = "\n\n".join(
-            f"[CHUNK:{c.id}]: {c.text[:400]}" for c in hop1_chunks
+            f"[CHUNK:{c.id}]: {c.content[:400]}" for c in hop1_chunks
         )
         prompt_hop1 = RETRIEVAL_PROMPT_HOP1.format(
             query=context.query,
@@ -154,15 +163,13 @@ class RetrievalAgent(BaseAgent):
 
         # ── HOP 2 — with token streaming ────────────────────────────────────────────
         from core.rate_limiter import wait as rate_wait
-        rate_wait()
-        stream_config = genai.GenerationConfig(temperature=0.0)
-        # Note: hop-2 uses FREE TEXT mode (not JSON), so stream=True works here.
-        # hop-1 uses JSON mode and cannot stream — that is correct.
+        await rate_wait()
+        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
         response_stream = await asyncio.to_thread(
-            self._model.generate_content,
-            prompt_hop2,
-            generation_config=stream_config,
-            stream=True,
+            client.models.generate_content_stream,
+            model="gemini-2.0-flash",
+            contents=prompt_hop2,
+            config=types.GenerateContentConfig(temperature=0.0),
         )
 
         hop2_text = ""

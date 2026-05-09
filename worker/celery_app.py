@@ -2,6 +2,8 @@ import os
 from celery import Celery
 
 app = Celery("mega_ai", broker=os.environ["REDIS_URL"])
+app.conf.imports = ("worker.tasks",)
+app.autodiscover_tasks(["worker"])
 
 app.conf.update(
     broker_transport_options={"visibility_timeout": 3600},

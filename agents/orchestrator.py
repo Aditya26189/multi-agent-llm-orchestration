@@ -201,7 +201,16 @@ _agents_map = None
 _compression_agent = None
 
 def _run(coro):
-    return asyncio.run(coro)
+    try:
+        loop = asyncio.get_running_loop()
+        # Already inside a running loop (LangGraph context) — use a thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result()
+    except RuntimeError:
+        # No running loop — safe to call asyncio.run directly
+        return asyncio.run(coro)
 
 def decomposition_node(state: SharedContext) -> SharedContext:
     _run(_agents_map[AgentID.DECOMPOSITION].run(state, _budget_mgr, _redis_pub))

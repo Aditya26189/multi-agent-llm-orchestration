@@ -9,9 +9,9 @@ import redis.asyncio as aioredis
 
 # SAFE SSE IMPORT — tries fastapi.sse first, falls back to sse-starlette
 try:
-    from fastapi.sse import EventSourceResponse, ServerSentEvent
+    from fastapi.sse import EventSourceResponse
 except ImportError:
-    from sse_starlette.sse import EventSourceResponse, ServerSentEvent
+    from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter()
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
@@ -76,11 +76,9 @@ async def submit_query(request: Request, body: QueryRequest):
                 except json.JSONDecodeError:
                     continue
                 event_type = data.get("event_type", "message")
-                yield ServerSentEvent(
-                    data=json.dumps(data),
-                    event=event_type,
-                    id=str(data.get("id", "")),
-                )
+                event_id = str(data.get("id", ""))
+                payload = json.dumps(data)
+                yield f"id: {event_id}\nevent: {event_type}\ndata: {payload}\n\n"
                 if event_type in ("done", "error"):
                     break
         finally:
@@ -88,5 +86,4 @@ async def submit_query(request: Request, body: QueryRequest):
             await pubsub.aclose()
             await redis_client.aclose()
 
-    # ping=15 handles keepalive
-    return EventSourceResponse(event_gen(), ping=15)
+    return EventSourceResponse(event_gen())

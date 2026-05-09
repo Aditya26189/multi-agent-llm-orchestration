@@ -10,6 +10,14 @@ make test
 make eval
 ```
 
+## AI Collaboration
+
+This repository was developed with assistance from AI pair-programming tools during implementation and documentation. AI assistance was used for scaffolding, generating boilerplate code, and drafting documentation prompts. All substantive design decisions, security controls, and final code reviews were performed by the human developer.
+
+AI-assisted aspects: boilerplate generation, prompt engineering, and iterative refactoring suggestions.
+Human-reviewed aspects: architecture, eval design, production hardening, and final testing.
+
+
 ## Data Leakage Prevention
 
 In LLM evaluation systems, data leakage means the judge has seen the
@@ -72,7 +80,7 @@ This makes regressions immediately visible without requiring manual comparison.
 | Seed documents | 30 |
 | Eval cases | 15 |
 
-Note: The reference specification assumed OpenAI (GPT-4o + text-embedding-3-small). This implementation uses a Gemini-only stack (Gemini 2.0 Flash + text-embedding-004, 768-dim) but preserves all specified behaviors: multi-agent orchestration, 2-hop RAG, evaluation harness, and self-improving prompt loop.
+Note: The reference specification assumed OpenAI (GPT-4o + text-embedding-3-small). This implementation uses a Gemini-only stack (Gemini 2.0 Flash + gemini-embedding-001, 768-dim) but preserves all specified behaviors: multi-agent orchestration, 2-hop RAG, evaluation harness, and self-improving prompt loop.
 
 ## Documentation
 
@@ -136,7 +144,65 @@ The PostgreSQL database uses `pgvector` for similarity search and contains 10 co
 7 agents communicate exclusively through `SharedContext` (blackboard pattern).
 No agent calls another agent directly. The Orchestrator mediates all handoffs.
 
-See [Architecture Docs](docs/architecture.md) and [Agents Breakdown](docs/agents.md) for detailed descriptions.
+```text
+┌─────────────────────────────────────────────────┐
+│                   CLIENT                        │
+│                (SSE Stream)                     │
+└─────────────────┬───────────────────────────────┘
+                  │ POST /query
+┌─────────────────▼───────────────────────────────┐
+│              FastAPI (port 8000)                │
+│   /query  /jobs/trace  /eval  /rewrites         │
+└─────────────────┬───────────────────────────────┘
+                  │ Celery task
+┌─────────────────▼───────────────────────────────┐
+│           Celery Worker + LangGraph             │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
+│  │Orchestr. │→ │Decompose │→ │  Retrieval   │   │
+│  └──────────┘  └──────────┘  └──────────────┘   │
+│       ↑              ↓              ↓           │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
+│  │Synthesis │← │Critique  │← │  SharedCtx   │   │
+│  └──────────┘  └──────────┘  └──────────────┘   │
+└─────────────────┬───────────────────────────────┘
+         ┌────────┴────────┐
+┌────────▼────┐   ┌────────▼────┐
+│ PostgreSQL  │   │    Redis    │
+│ + pgvector  │   │  (pub/sub)  │
+└─────────────┘   └─────────────┘
+```
+
+## Agent Decision Boundaries
+
+### Orchestrator
+Decides: which agent to invoke next, in what order, with what token budget
+Does NOT decide: what content to generate (delegates to sub-agents)
+Limits: MAX_TURNS=10, MAX_TOOL_CALLS=20 per job
+
+### Decomposition Agent
+Decides: how many sub-tasks to create (1-5), what dependencies exist between them
+Does NOT decide: how to answer sub-tasks (delegates to retrieval)
+Limits: will not create circular dependencies (DFS cycle detection)
+
+### Retrieval Agent
+Decides: what to search for (hop1 query), what follow-up to search for (hop2 query)
+Does NOT decide: what the final answer is (outputs raw retrieved content)
+Limits: 2 hops maximum, top-K=3 chunks per hop
+
+### Critique Agent
+Decides: which specific text spans are low-confidence, what the flag reason is
+Does NOT decide: how to fix flagged spans (delegates to synthesis)
+Limits: only flags spans with confidence < 0.6
+
+### Synthesis Agent
+Decides: how to resolve flagged spans (RESOLVE/REMOVE/HEDGE)
+Does NOT decide: which spans to flag (from critique agent)
+Limits: must address every flagged span before returning final answer
+
+### Meta Agent
+Decides: which dimension had worst performance, which agent is responsible
+Does NOT decide: whether to apply the rewrite (human must approve)
+Limits: proposes one rewrite per eval run
 
 ### Dynamic Routing — Proof It Is Not Hardcoded
 
@@ -213,7 +279,7 @@ This loop does NOT auto-apply prompts or self-modify schemas.
 ## LLM Provider
 
 Uses **Google Gemini 2.0 Flash** (`gemini-2.0-flash`) via `google-generativeai`.
-- Embeddings: `models/text-embedding-004` (768-dim)
+- Embeddings: `gemini-embedding-001` (768-dim)
 - Structured output: `response_mime_type="application/json"`
 - Token counting: `tiktoken` `o200k_base` (approximate for Gemini)
 
@@ -221,11 +287,13 @@ Generator uses Gemini 2.0 Flash; judge uses Gemini 1.5 Flash (different model ch
 
 ## Known Limitations
 
-1. **Gemini-only stack**: Original spec assumed OpenAI. This uses `gemini-2.0-flash` for generation, `gemini-1.5-flash` for eval judging, `text-embedding-004` for embeddings (768-dim).
+1. **Gemini-only stack**: Original spec assumed OpenAI. This uses `gemini-2.0-flash` for generation, `gemini-1.5-flash` for eval judging, `gemini-embedding-001` for embeddings (768-dim).
 
-2. **Token counting approximation**: Budget tracking uses `tiktoken o200k_base` as a local approximation for Gemini models (±8% variance vs Gemini's SentencePiece tokenizer). No network call — intentional for latency reasons. Production replacement: `genai.count_tokens()`.
+2. **Per-turn budget tracking constraint**: The `ContextBudgetManager` uses a single cumulative budget per agent across the entire job. It lacks true per-turn reset isolation due to the static `used_tokens` property of `BudgetEntry` remaining persistent, meaning it does not enforce per-turn bounds strictly as requested in PS §3.1.
 
-3. **Generator and judge same provider**: Different checkpoints reduce self-enhancement bias but do not eliminate it entirely.
+3. **Token counting approximation**: Budget tracking uses `tiktoken o200k_base` as a local approximation for Gemini models (±8% variance vs Gemini's SentencePiece tokenizer). No network call — intentional for latency reasons. Production replacement: `genai.count_tokens()`.
+
+4. **Generator and judge same provider**: Different checkpoints reduce self-enhancement bias but do not eliminate it entirely.
 
 4. **TOKEN streaming limited to Synthesis**: Gemini JSON mode does not support token streaming. Only Synthesis streams token-by-token via Redis pub/sub.
 
