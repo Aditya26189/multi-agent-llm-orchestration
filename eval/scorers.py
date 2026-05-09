@@ -42,11 +42,18 @@ def score_answer_correctness(
 
 # B. Citation Accuracy ────────────────────────────────────────────────────────
 
+def _keyword_overlap(sentence: str, chunk_text: str) -> float:
+    s_words = set(sentence.lower().split())
+    c_words = set(chunk_text.lower().split())
+    if not s_words: return 0.0
+    return len(s_words.intersection(c_words)) / len(s_words)
+
+
 def score_citation_accuracy(context: SharedContext) -> Tuple[float, str]:
     if not context.provenance_map:
         return 0.0, "No provenance map found — retrieval agent did not produce citations"
 
-    valid_chunk_ids = {c.id for c in context.retrieved_chunks}
+    valid_chunk_ids = {c.id: c.text for c in context.retrieved_chunks}
     total = len(context.provenance_map)
     valid = 0
     details = []
@@ -56,8 +63,14 @@ def score_citation_accuracy(context: SharedContext) -> Tuple[float, str]:
             valid += 1  # [REASONING] entries are always valid
             details.append(f"[REASONING] '{entry.sentence[:40]}...' — valid")
         elif entry.source_chunk_id in valid_chunk_ids:
-            valid += 1
-            details.append(f"[CHUNK:{entry.source_chunk_id}] — valid")
+            # 2-step validation: ID is valid, now check semantic overlap
+            chunk_text = valid_chunk_ids[entry.source_chunk_id]
+            overlap = _keyword_overlap(entry.sentence, chunk_text)
+            if overlap > 0.3:
+                valid += 1
+                details.append(f"[CHUNK:{entry.source_chunk_id}] — valid (overlap {overlap:.2f})")
+            else:
+                details.append(f"[CHUNK:{entry.source_chunk_id}] — INVALID (overlap {overlap:.2f} too low)")
         else:
             details.append(f"[CHUNK:{entry.source_chunk_id}] — INVALID (not in retrieved set)")
 

@@ -98,12 +98,44 @@ class DecompositionAgent(BaseAgent):
                 description=context.query,
                 deps=[],
             )]
-            context.dependency_graph = {"t1": []}
             context.add_event(
                 agent_id="decomposition",
                 event_type=EventType.ERROR,
                 policy_violation=f"decomposition_failed: {str(e)[:100]}",
             )
+
+
+def resolve_execution_order(dependency_graph: Dict[str, List[str]]) -> List[List[str]]:
+    """Topological sort. Returns list of lists (execution batches)."""
+    in_degree = {u: 0 for u in dependency_graph}
+    # For dependency_graph {task_id: [deps]}, we need to reverse it to find out which tasks depend on a given task
+    adj = {u: [] for u in dependency_graph}
+    
+    for u, deps in dependency_graph.items():
+        for dep in deps:
+            if dep not in adj:
+                adj[dep] = []
+            if u not in in_degree:
+                in_degree[u] = 0
+            adj[dep].append(u)
+            in_degree[u] += 1
+            
+    queue = [u for u in in_degree if in_degree[u] == 0]
+    batches = []
+    
+    while queue:
+        batches.append(queue)
+        next_queue = []
+        for u in queue:
+            for v in adj.get(u, []):
+                in_degree[v] -= 1
+                if in_degree[v] == 0:
+                    next_queue.append(v)
+        queue = next_queue
+        
+    if sum(len(b) for b in batches) != len(dependency_graph):
+        raise ValueError("Cycle detected in dependency graph")
+    return batches
 
 
 class DependencyExecutor:
@@ -152,10 +184,15 @@ class DependencyExecutor:
 
     async def execute(self, handler) -> Dict[str, str]:
         """handler: async callable(subtask) -> str"""
-        await asyncio.gather(
-            *[self._run_task(t, handler) for t in self.tasks.values()],
-            return_exceptions=True,
-        )
+        graph = {t_id: t.deps for t_id, t in self.tasks.items()}
+        batches = resolve_execution_order(graph)
+        
+        for batch in batches:
+            await asyncio.gather(
+                *[self._run_task(self.tasks[tid], handler) for tid in batch],
+                return_exceptions=True,
+            )
+            
         return {tid: t.output or "" for tid, t in self.tasks.items()}
 
     async def _run_task(self, task: SubTask, handler) -> None:

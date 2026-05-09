@@ -10,7 +10,7 @@ from typing import Optional
 from core.context import (
     AgentID, SharedContext, RoutingDecision, PolicyViolation, EventType
 )
-from core.budget import ContextBudgetManager
+from core.budget import ContextBudgetManager, BudgetOverflowError
 from core.streaming import RedisPublisher
 
 MAX_TOOL_CALLS_PER_JOB = 20
@@ -212,20 +212,41 @@ def _run(coro):
         # No running loop — safe to call asyncio.run directly
         return asyncio.run(coro)
 
-def decomposition_node(state: SharedContext) -> SharedContext:
-    _run(_agents_map[AgentID.DECOMPOSITION].run(state, _budget_mgr, _redis_pub))
+async def _run_agent_with_budget_check(agent_id: str, agent, context, budget_mgr, redis_pub):
+    try:
+        budget_mgr.assert_compliant(agent_id)
+    except BudgetOverflowError:
+        context.violations.append(PolicyViolation(
+            agent_id=agent_id,
+            violation_type="budget_overflow",
+            details="Agent cannot run, budget exhausted before start.",
+            tokens_over_budget=0,
+        ))
+        return
+    await agent.run(context, budget_mgr, redis_pub)
+
+async def decomposition_node(state: SharedContext) -> SharedContext:
+    await _run_agent_with_budget_check(
+        AgentID.DECOMPOSITION.value, _agents_map[AgentID.DECOMPOSITION], state, _budget_mgr, _redis_pub
+    )
     return state
 
-def retrieval_node(state: SharedContext) -> SharedContext:
-    _run(_agents_map[AgentID.RETRIEVAL].run(state, _budget_mgr, _redis_pub))
+async def retrieval_node(state: SharedContext) -> SharedContext:
+    await _run_agent_with_budget_check(
+        AgentID.RETRIEVAL.value, _agents_map[AgentID.RETRIEVAL], state, _budget_mgr, _redis_pub
+    )
     return state
 
-def critique_node(state: SharedContext) -> SharedContext:
-    _run(_agents_map[AgentID.CRITIQUE].run(state, _budget_mgr, _redis_pub))
+async def critique_node(state: SharedContext) -> SharedContext:
+    await _run_agent_with_budget_check(
+        AgentID.CRITIQUE.value, _agents_map[AgentID.CRITIQUE], state, _budget_mgr, _redis_pub
+    )
     return state
 
-def synthesis_node(state: SharedContext) -> SharedContext:
-    _run(_agents_map[AgentID.SYNTHESIS].run(state, _budget_mgr, _redis_pub))
+async def synthesis_node(state: SharedContext) -> SharedContext:
+    await _run_agent_with_budget_check(
+        AgentID.SYNTHESIS.value, _agents_map[AgentID.SYNTHESIS], state, _budget_mgr, _redis_pub
+    )
     return state
 
 def compression_node(state: SharedContext) -> SharedContext:

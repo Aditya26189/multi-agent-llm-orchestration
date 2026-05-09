@@ -105,6 +105,17 @@ class RetrievalAgent(BaseAgent):
         await engine.dispose()
         return result
 
+    async def _formulate_followup(self, query: str, chunks: list) -> str:
+        """LLM determines missing information and formulates 2nd hop query."""
+        prompt = f"Query: {query}\nFound so far: {[c.content[:200] for c in chunks]}\nWhat is missing? Return ONLY the search query."
+        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+        res = await asyncio.to_thread(
+            client.models.generate_content,
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
+        return res.text.strip() if hasattr(res, "text") else query
+
     async def run(
         self,
         context: SharedContext,
@@ -140,12 +151,8 @@ class RetrievalAgent(BaseAgent):
 
         hop1_response = await self.generate(prompt_hop1)
 
-        # Extract second hop query
-        second_hop_query = context.query  # fallback
-        for line in hop1_response.splitlines():
-            if line.startswith("SECOND_HOP_QUERY:"):
-                second_hop_query = line.replace("SECOND_HOP_QUERY:", "").strip()
-                break
+        # Extract second hop query using _formulate_followup
+        second_hop_query = await self._formulate_followup(context.query, hop1_chunks)
 
         # ── HOP 2 ──────────────────────────────────────────────────────────────
         hop2_chunks = await self._vector_search(second_hop_query, limit=5, hop=2)

@@ -19,7 +19,7 @@ from core.budget import ContextBudgetManager, BudgetOverflowError
 from core.streaming import RedisPublisher
 
 SUMMARIZE_PROMPT = """Summarize the following text concisely, preserving all key facts, numbers, names, and source citations.
-Preserve any text that looks like [CHUNK:id] citations, URLs, or JSON exactly as-is.
+CRITICAL: You MUST preserve all JSON objects, tool call logs, [CHUNK:id] citations, and markdown tables verbatim.
 Return ONLY the summary text, no preamble.
 
 Text:

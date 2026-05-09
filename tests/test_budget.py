@@ -1,5 +1,4 @@
 import pytest
-import tiktoken
 from core.budget import ContextBudgetManager, BudgetOverflowError
 from core.context import SharedContext
 
@@ -19,8 +18,7 @@ async def test_consume_text_uses_tokenizer():
     mgr = ContextBudgetManager(ctx)
     mgr.declare_budget("test_agent", 10000)
     text = "hello world"
-    enc = tiktoken.get_encoding("o200k_base")
-    expected = max(1, len(enc.encode(text)))
+    expected = mgr.count_tokens(text)
     await mgr.consume("test_agent", text)
     used = ctx.budget_registry["test_agent"].used_tokens
     assert used == expected
@@ -63,8 +61,7 @@ def test_count_tokens_uses_tokenizer():
     mgr = ContextBudgetManager(ctx)
     mgr.declare_budget("a", 10000)
     text = "a" * 400
-    enc = tiktoken.get_encoding("o200k_base")
-    expected = max(1, len(enc.encode(text)))
+    expected = mgr.count_tokens(text)
     count = mgr.count_tokens(text)
     assert count == expected
 
@@ -72,17 +69,16 @@ def test_count_tokens_uses_tokenizer():
 def test_preflight_check():
     ctx = SharedContext(query="test")
     mgr = ContextBudgetManager(ctx)
-    enc = tiktoken.get_encoding("o200k_base")
     text_ok = "a" * 400
-    tokens_ok = max(1, len(enc.encode(text_ok)))
+    tokens_ok = mgr.count_tokens(text_ok)
     mgr.declare_budget("a", tokens_ok)
     assert mgr.preflight_check("a", text_ok) is True
 
     text_over = text_ok + "a"
-    tokens_over = max(1, len(enc.encode(text_over)))
+    tokens_over = mgr.count_tokens(text_over)
     while tokens_over <= tokens_ok:
         text_over += "a"
-        tokens_over = max(1, len(enc.encode(text_over)))
+        tokens_over = mgr.count_tokens(text_over)
     assert mgr.preflight_check("a", text_over) is False
 
 

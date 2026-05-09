@@ -68,8 +68,8 @@ with cosine similarity ~0.71 (high enough to be co-retrieved in adjacent hops).
 - Dimensions: 768
 - Average cosine similarity between all document pairs: Documents span distinct domains ensuring minimal cross-topic cosine overlap during retrieval.
 - Adversarial document pairs (e.g., `mars_water_evidence` vs `mars_water_contested`):
-  similarity **~0.71** — high enough to be co-retrieved in a single hop window
-- BASELINE document pairs: similarity **~0.18** — very distinct, near-zero
+  similarity is calculated dynamically at runtime — high enough to be co-retrieved in a single hop window
+- BASELINE document pairs: similarity is calculated dynamically at runtime — very distinct, near-zero
   cross-contamination risk
 
 ### Token Length Distribution

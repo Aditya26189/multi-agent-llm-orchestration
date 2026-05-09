@@ -288,22 +288,13 @@ Generator uses Gemini 2.0 Flash; judge uses Gemini 1.5 Flash (different model ch
 ## Known Limitations
 
 1. **Gemini-only stack**: Original spec assumed OpenAI. This uses `gemini-2.0-flash` for generation, `gemini-1.5-flash` for eval judging, `gemini-embedding-001` for embeddings (768-dim).
-
-2. **Per-turn budget tracking constraint**: The `ContextBudgetManager` uses a single cumulative budget per agent across the entire job. It lacks true per-turn reset isolation due to the static `used_tokens` property of `BudgetEntry` remaining persistent, meaning it does not enforce per-turn bounds strictly as requested in PS §3.1.
-
-3. **Token counting approximation**: Budget tracking uses `tiktoken o200k_base` as a local approximation for Gemini models (±8% variance vs Gemini's SentencePiece tokenizer). No network call — intentional for latency reasons. Production replacement: `genai.count_tokens()`.
-
-4. **Generator and judge same provider**: Different checkpoints reduce self-enhancement bias but do not eliminate it entirely.
-
-4. **TOKEN streaming limited to Synthesis**: Gemini JSON mode does not support token streaming. Only Synthesis streams token-by-token via Redis pub/sub.
-
-5. **Web search is a stub**: Returns synthetic results. Production replacement: SerpAPI or Tavily.
-
-6. **Redis pub/sub has no persistence**: If API pod restarts mid-pipeline, SSE events are lost. Clients recover via `GET /jobs/{job_id}/trace`.
-
-7. **Sequential evaluation**: 15 cases run one at a time (~90 seconds at Gemini's 15 RPM free-tier limit).
-
-8. **Code execution is subprocess-based**: Mitigated by blocklist but not fully sandboxed. Production fix: gVisor or Firecracker.
+2. **Token counting latency**: Token counting uses `genai.count_tokens()` via `asyncio.to_thread` which incurs minor latency compared to local tiktoken.
+3. **Generator and Judge same provider**: Generator and Judge use different checkpoints to reduce self-enhancement bias but share the same provider.
+4. **TOKEN streaming limited to Synthesis and Retrieval**: TOKEN streaming limited to Synthesis and Retrieval hop-2 due to Gemini JSON mode constraints for other agents.
+5. **Web search is a stub**: Web search is a synthetic stub. Returns synthetic results. Production replacement: SerpAPI or Tavily.
+6. **Redis pub/sub has no persistence**: missed SSE events require `/jobs/trace` polling.
+7. **Sequential evaluation**: eval cases run 1-by-1 due to rate limits.
+8. **Code execution is subprocess-based**: Code execution uses subprocess, not a secure container.
 
 ## What I Would Build Next
 

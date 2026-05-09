@@ -87,7 +87,7 @@ def test_answer_correctness_no_ground_truth_returns_1():
 
 def test_citation_accuracy_all_valid():
     ctx = SharedContext(query="test")
-    chunk = _make_chunk("abc12345")
+    chunk = _make_chunk("abc12345", text="Fact from chunk.")
     ctx.retrieved_chunks = [chunk]
     ctx.provenance_map = [
         ProvenanceEntry(sentence="Fact from chunk.", source_agent=AgentID.RETRIEVAL,

@@ -186,11 +186,12 @@ class MetaAgent(BaseAgent):
             }
             responsible_agent = agent_map.get(worst_dim, "synthesis")
 
+            from agents.prompts import SYSTEM_PROMPTS
             rewrite = await self.propose_rewrite(
                 failure_cases=failures,
                 worst_dimension=worst_dim,
                 agent_id=responsible_agent,
-                current_prompt=f"Current {responsible_agent} prompt (see agents/{responsible_agent}.py)",
+                current_prompt=SYSTEM_PROMPTS.get(responsible_agent, ""),
             )
             await self.persist_rewrite(rewrite)
 

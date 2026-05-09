@@ -52,6 +52,14 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
     context = SharedContext(job_id=job_id, query=query, status=JobStatus.RUNNING)
     budget_mgr = ContextBudgetManager(context, redis_pub)
 
+    budget_mgr.declare_budget("orchestrator",  2048)
+    budget_mgr.declare_budget("decomposition", 3072)
+    budget_mgr.declare_budget("retrieval",     6144)
+    budget_mgr.declare_budget("critique",      4096)
+    budget_mgr.declare_budget("synthesis",     4096)
+    budget_mgr.declare_budget("compression",   8192)
+    budget_mgr.declare_budget("meta",          4096)
+
     orchestrator = Orchestrator()
     compression_agent = CompressionAgent()
 
@@ -138,8 +146,11 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
 
         except Exception as e:
             context.status = JobStatus.FAILED
-            await redis_pub.publish_error(context.job_id, str(e))
-            await _save_context_to_db(context)
+            try:
+                await redis_pub.publish_error(context.job_id, str(e))
+                await _save_context_to_db(context)
+            except Exception:
+                pass  # don't let cleanup failure mask the real error
             raise
 
         finally:
