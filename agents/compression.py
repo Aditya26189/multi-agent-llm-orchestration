@@ -112,7 +112,7 @@ class CompressionAgent(BaseAgent):
         budget_mgr: ContextBudgetManager,
         redis_pub=None,
     ) -> None:
-        """Triggered automatically by worker when any agent exceeds 90% budget."""
+        """Triggered automatically by worker when any agent exceeds 80% budget."""
         if redis_pub:
             await redis_pub.publish(context.job_id, {
                 "event_type": "COMPRESSION_TRIGGERED",

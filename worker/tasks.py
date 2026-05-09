@@ -4,11 +4,11 @@ Celery pipeline task.
 Architecture:
 - Orchestrator decides next agent via LLM routing (NOT hardcoded sequence)
 - Each agent writes to SharedContext — never calls other agents directly
-- BudgetManager auto-triggers compression at 90% budget usage
+- BudgetManager auto-triggers compression at 80% budget usage
 - All events published to Redis → SSE client sees real-time updates
 
 Gemini override: asyncio.run() instead of get_event_loop().run_until_complete()
-                 GOOGLE_API_KEY instead of OPENAI_API_KEY
+                 GOOGLE_API_KEY for model access
 """
 import asyncio
 import os
@@ -79,6 +79,47 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
             # Run LangGraph pipeline synchronously as required by Celery context
             final_state = pipeline.invoke(context)
 
+            # Auto-trigger compression if any agent near budget limit
+            for agent_id, entry in budget_mgr.get_registry().items():
+                if entry.used_tokens > entry.max_tokens * 0.80:
+                    await redis_pub.publish(final_state.job_id, {
+                        "event_type": "COMPRESSION_TRIGGERED",
+                        "agent_id": agent_id,
+                        "used": entry.used_tokens,
+                        "max": entry.max_tokens,
+                        "id": final_state.next_seq(),
+                    })
+
+                    if agent_id == "retrieval":
+                        if final_state.retrieved_chunks:
+                            chunks_text = "\n\n".join(
+                                f"[CHUNK:{c.id}]: {c.text}"
+                                for c in final_state.retrieved_chunks
+                            )
+                            compressed = await compression_agent.compress(
+                                agent_id=agent_id,
+                                text=chunks_text,
+                                target_tokens=int(entry.max_tokens * 0.70),
+                                budget_mgr=budget_mgr,
+                                context=final_state,
+                            )
+                            final_state.retrieval_reasoning = compressed
+
+                    elif agent_id in ("synthesis", "critique"):
+                        if final_state.final_answer and len(final_state.final_answer) > 200:
+                            final_state.final_answer = await compression_agent.compress(
+                                agent_id=agent_id,
+                                text=final_state.final_answer,
+                                target_tokens=int(entry.max_tokens * 0.70),
+                                budget_mgr=budget_mgr,
+                                context=final_state,
+                            )
+
+                    elif agent_id == "decomposition":
+                        for task in final_state.subtasks:
+                            if len(task.description) > 200:
+                                task.description = task.description[:200] + "..."
+
             # ── PIPELINE COMPLETE ──────────────────────────────────────────────
             if final_state.status != JobStatus.DONE:
                 final_state.status = JobStatus.DONE
@@ -110,7 +151,16 @@ async def _save_context_to_db(context: SharedContext) -> None:
     from sqlalchemy import text
 
     from core.cost import CostCalculator
-    cost_usd = CostCalculator.calculate_cost(context)
+    cost_calc = CostCalculator()
+    total_cost = sum(
+        cost_calc.calculate(
+            model=event.model_used or "",
+            input_tokens=event.input_token_count or 0,
+            output_tokens=event.output_token_count or 0,
+        )
+        for event in context.execution_events
+        if hasattr(event, "model_used")
+    )
 
     async with AsyncSessionLocal() as db:
         # Upsert job
@@ -127,7 +177,7 @@ async def _save_context_to_db(context: SharedContext) -> None:
             "q": context.query,
             "s": context.status.value,
             "tok": sum(e.used_tokens for e in context.budget_registry.values()),
-            "cost": cost_usd,
+            "cost": total_cost,
             "model": "gemini-2.0-flash",
         })
 
