@@ -20,6 +20,14 @@ curl -X POST "http://localhost:8000/query" \
      -d '{"query": "What is the capital of France?"}'
 ```
 
+**Note on adversarial test case tc_11 (prompt injection):**
+The injection detector in `/query` blocks injections at the API layer before
+they reach Celery. During evaluation, `EvaluationHarness` calls the pipeline
+function directly (not via HTTP POST /query), so tc_11 tests the pipeline's
+internal injection handling and agent-level robustness — not just the API
+filter. Both layers are tested: the API filter via integration test, the
+pipeline internals via the eval harness.
+
 ### Response Lifecycle & Fallback
 The server implements a **keep-alive fallback**. Because LangGraph loops might block for several seconds during heavy LLM generation, the API emits an empty `ping` event every 15 seconds to prevent client-side HTTP timeouts (like those enforced by Nginx or browser fetch APIs).
 
@@ -141,21 +149,17 @@ curl -X POST "http://localhost:8000/rewrites/b3c4d5e6/review" \
 - `409 Conflict`: 
 ```json
 {
-  "detail": {
-    "code": "REWRITE_ALREADY_REVIEWED",
-    "message": "Rewrite b3c4d5e6 has already been approved.",
-    "job_id": null
-  }
+  "error_code": "REWRITE_ALREADY_REVIEWED",
+  "message": "Rewrite b3c4d5e6 already has status: approved",
+  "job_id": null
 }
 ```
 - `404 Not Found`: 
 ```json
 {
-  "detail": {
-    "code": "REWRITE_NOT_FOUND",
-    "message": "No rewrite with ID b3c4d5e6",
-    "job_id": null
-  }
+  "error_code": "REWRITE_NOT_FOUND",
+  "message": "No prompt rewrite with ID: b3c4d5e6",
+  "job_id": null
 }
 ```
 
@@ -164,21 +168,22 @@ curl -X POST "http://localhost:8000/rewrites/b3c4d5e6/review" \
 ## 5. Re-run Evaluation
 **POST** `/eval/run`
 
-Triggers a manual, asynchronous execution of the evaluation harness. Optionally accepts a list of failed test case IDs to isolate testing. This endpoint queues the job and returns immediately.
+Triggers a background evaluation run. Returns immediately with a run_id.
+Poll `GET /eval/latest` to see results when complete.
 
-### Request
-```bash
-curl -X POST "http://localhost:8000/eval/run" \
-     -H "Content-Type: application/json" \
-     -d '{"failed_case_ids": ["tc_12", "tc_14"]}'
-```
-
-### Response (202 Accepted)
+**Optional request body:**
 ```json
-{ 
-  "run_id": "uuid", 
-  "status": "queued", 
-  "case_count": 2 
-}
+{"failed_case_ids": ["tc_01", "tc_02"], "use_latest_prompts": true}
 ```
-Results are retrieved via `GET /eval/latest` after completion.
+Omit body to run all 15 test cases.
+
+**Response (202 Accepted):**
+```json
+{"message": "Evaluation started in background.", "run_id": "uuid"}
+```
+
+**Notes:**
+- Evaluation runs asynchronously via `asyncio.create_task`
+- Each test case takes ~4 seconds (Gemini free tier rate limit)
+- Full 15-case run takes approximately 60-90 seconds
+- Results stored in `eval_results` table, queryable via `GET /eval/latest`
