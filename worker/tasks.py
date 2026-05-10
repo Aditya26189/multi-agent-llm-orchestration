@@ -46,6 +46,8 @@ def run_agent_pipeline(self, query: str, job_id: str) -> dict:
 
 
 async def _run_pipeline_async(query: str, job_id: str) -> dict:
+    if os.environ.get("MOCK_LLM") == "true":
+        _apply_llm_mock()
     redis_pub = RedisPublisher(REDIS_URL)
     await redis_pub.connect()
 
@@ -290,3 +292,29 @@ async def _save_context_to_db(context: SharedContext) -> None:
 
         await db.commit()
     await engine.dispose()
+
+def _apply_llm_mock():
+    """Patches all Gemini clients to return a fixed response. Set MOCK_LLM=true to enable."""
+    import google.generativeai as old_genai
+
+    class _MockResponse:
+        text = (
+            "[CHUNK:mock001] Python is a high-level programming language "
+            "created by Guido van Rossum in 1991. "
+            "[REASONING] It is widely used for data science and web development."
+        )
+        candidates = []
+
+    def _mock_generate(*args, **kwargs):
+        return _MockResponse()
+
+    # Patch old-style GenerativeModel (base.py, orchestrator.py, tools.py, budget.py)
+    old_genai.GenerativeModel.generate_content = _mock_generate
+
+    # Patch new-style genai.Client (retrieval.py)
+    try:
+        import google.genai as new_genai
+        new_genai.Client.models.generate_content = lambda *a, **kw: _MockResponse()
+        new_genai.Client.models.generate_content_stream = lambda *a, **kw: iter([_MockResponse()])
+    except Exception:
+        pass

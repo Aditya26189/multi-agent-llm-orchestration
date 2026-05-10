@@ -1,6 +1,6 @@
 # MEGA-AI Evaluation & Testing
 
-MEGA-AI employs a rigorous, 15-case evaluation harness designed not just to test for accuracy, but to measure the orchestration pipeline's robustness against adversarial manipulation, false premises, and ambiguous inputs. 
+MEGA-AI employs a rigorous, 15-case evaluation harness designed not just to test for accuracy, but to measure the orchestration pipeline's robustness against adversarial manipulation, false premises, and ambiguous inputs.
 
 Unlike standard benchmark suites that rely purely on LLM-as-a-judge (which is often a black box and highly biased), MEGA-AI's evaluation harness uses a hybrid approach: explicitly programmed Python scoring logic over 6 distinct dimensions, evaluated using a dual-model strategy.
 
@@ -14,9 +14,12 @@ MEGA-AI mitigates this by strictly separating generation from evaluation:
 - **Generator Model:** `gemini-2.0-flash`. This model powers all 7 active agents in the pipeline (Orchestrator, Retrieval, Synthesis, etc.).
 - **Judge Model:** `gemini-1.5-flash`. This is a fundamentally different checkpoint with a distinct parameter weighting. It is used *exclusively* in the `EvaluationHarness` to evaluate the final output against the `test_cases.json` dataset.
 
-Furthermore, the Judge model runs with `temperature=0.0` and a fixed seed (`seed=42`) to guarantee deterministic grading across evaluation runs.
+Furthermore, the Judge model runs with `temperature=0.0` to guarantee deterministic grading across evaluation runs.
+
+> **Known limitation:** Both models share the same provider (Google). Full elimination of self-enhancement bias would require using a model from a different provider as judge.
 
 ---
+
 ## Knowledge Base Analysis
 
 Before running any evaluation, we analyzed the 30 seed documents in the
@@ -27,7 +30,7 @@ retrieval hop strategy.
 ### Document Distribution
 
 | Domain | Count | Test Cases Covered |
-|--------|-------|--------------------|
+|--------|-------|---------------------|
 | Factual reference | 12 | tc_01–tc_05 (BASELINE) |
 | Technical / scientific | 11 | tc_06–tc_10 (AMBIGUOUS) |
 | Adversarial support | 7 | tc_11–tc_15 (ADVERSARIAL) |
@@ -60,7 +63,7 @@ The contradiction resolution test requires hop-1 to retrieve one side of the
 Mars water debate and hop-2 to retrieve the opposing view. If both sides are
 not co-retrieved, the critique agent cannot flag the contradiction and the
 synthesis agent has nothing to resolve. Mitigated by seeding both documents
-with cosine similarity ~0.71 (high enough to be co-retrieved in adjacent hops).
+with adversarial cosine similarity high enough to be co-retrieved in adjacent hops (calculated dynamically at runtime).
 
 ### Embedding Quality
 
@@ -136,21 +139,22 @@ Calculates the exact sub-string match of `key_facts` from the ground truth.
 
 ### 2. Contradiction Resolution (Weight: 20%)
 Evaluates the handoff between Critique and Synthesis.
-- If the Critique Agent flags a span of text (e.g., "Mars has confirmed liquid water") with `confidence < 0.6`, the Synthesis Agent *must* either remove that span or hedge it using predefined hedge phrases ("may", "some suggest", "contested"). 
+- If the Critique Agent flags a span of text (e.g., "Mars has confirmed liquid water") with `confidence < 0.6`, the Synthesis Agent *must* either remove that span or hedge it using predefined hedge phrases ("may", "some suggest", "contested").
 - *Score:* The percentage of flagged claims that were correctly resolved or hedged.
 
 ### 3. Citation Accuracy (Weight: 15%)
-Enforces rigorous provenance. 
+Enforces rigorous provenance.
 - Every fact in the `provenance_map` must have a valid `source_chunk_id` that directly maps back to a UUID stored in the `document_chunks` PostgreSQL table.
+- The scorer uses `_content_match()` keyword overlap between the cited chunk's `text` field and the cited sentence, rather than a simple ID-existence check. This detects hallucinated citations where the ID is valid but the chunk content does not support the claim.
 - *Score:* Valid citations / Total citations.
 
 ### 4. Tool Efficiency (Weight: 15%)
 Penalizes tool abuse. Every test case defines an `expected_min_tool_calls` and `expected_max_tool_calls`.
-- If the pipeline exceeds the max (e.g., due to an adversarial prompt telling it to "search alphabetically for every country"), the score is linearly penalized. 
+- If the pipeline exceeds the max (e.g., due to an adversarial prompt telling it to "search alphabetically for every country"), the score is linearly penalized.
 
 ### 5. Budget Compliance (Weight: 10%)
 Checks the `SharedContext` for any `PolicyViolation` objects of type `budget_overflow`.
-- *Score:* 1.0 for zero violations. 0.5 for 1 violation. 0.0 for >1 violations. 
+- *Score:* 1.0 for zero violations. 0.5 for 1 violation. 0.0 for >1 violations.
 
 ### 6. Critique Agreement (Weight: 10%)
 Measures the cohesion of the multi-agent system.
@@ -228,24 +232,52 @@ The evaluation suite actively tries to break the pipeline using prompt injection
 
 ## 5. Tool Failure Contracts
 
-The system specifies a strict contract for tool execution (`core/tools.py`), mapping 4 specific tools to 3 defined failure modes.
+The system specifies a strict contract for tool execution (`core/tools.py`), mapping 4 specific tools to 3 defined failure modes. All failure logic is implemented as a `ToolAction` enum dispatch in Python — none of it lives in prompt strings (satisfying PS §2.7).
 
-| Tool | Purpose | Failure Mode | Fallback Contract |
-|------|---------|--------------|-------------------|
-| `web_search` | External factual lookup | Timeout (5s) | Returns `{"error": "timeout", "partial_results": [...]}` if possible, else empty array. |
-| `sql_lookup` | Database execution | Malformed Input | Raises `SchemaValidationError`. Agent prompted to rewrite SQL. |
-| `code_exec` | Python sandbox | Execution Error | Returns `{"stderr": "...", "exit_code": 1}`. |
-| `self_reflect` | Internal scratchpad | Context Limit | Automatically triggers compression if near 80% budget limit. |
+| Tool | Purpose | Failure Mode | ToolAction |
+|------|---------|--------------|------------|
+| `web_search` | External factual lookup | `TIMEOUT` | `RETRY_SAME` (up to 2×) |
+| `web_search` | External factual lookup | `NO_RESULTS` | `RETRY_REFORMULATE` (broadens query) |
+| `sql_lookup` | Database NL→SQL execution | `INVALID_INPUT` | `SKIP_LOG_VIOLATION` |
+| `code_exec` | Python sandbox | `EXEC_ERROR` | `RETRY_REFORMULATE` (appends stderr) |
+| `self_reflect` | Internal context check | `EXEC_ERROR` | `FALLBACK_TOOL` → orchestrator |
 
-These contracts are explicitly enforced; there are no silent failures. If a tool fails 3 times, a `tool_retry_exceeded` policy violation is logged.
+All failures are logged as separate `ToolCallRecord` entries per attempt. If a tool fails 3 times, a `tool_retry_exceeded` policy violation is logged and the pipeline continues without that tool's output.
 
 ---
 
-## 6. The Self-Improving Loop (Meta Agent)
+## 6. Running the Evaluation Harness
 
-If the final `composite_score` of a pipeline run falls below an acceptable threshold, the **Meta Agent** is invoked. 
+### Standard run (requires Gemini API quota):
+```bash
+make eval
+# or
+docker compose exec api curl -X POST http://localhost:8000/eval/run
+# poll results:
+docker compose exec api curl -s http://localhost:8000/eval/latest
+```
+
+### Mock run (no quota consumed):
+```bash
+MOCK_LLM=true docker compose exec api pytest tests/test_eval.py -v
+```
+Setting `MOCK_LLM=true` patches all Gemini clients with a deterministic stub that returns fixed responses containing valid `[CHUNK:mock001]` citation markers. This allows the full scoring pipeline to be verified without making any API calls.
+
+> **Note on free-tier quota:** Running 15 eval cases with real Gemini calls exhausts the free-tier RPM limit (~15 RPM). The harness includes a 4-second sleep between cases. A full 15-case run takes approximately 60–90 seconds. If quota is exhausted, wait for the quota window to reset (typically 1 minute for RPM, 24 hours for RPD).
+
+---
+
+## 7. The Self-Improving Loop (Meta Agent)
+
+If the final `composite_score` of a pipeline run falls below an acceptable threshold, the **Meta Agent** is invoked.
 
 1. **Analysis:** The Meta Agent reads the granular `execution_events` trace to see exactly where the pipeline failed (e.g., did the Orchestrator route poorly, or did Synthesis ignore Critique?).
 2. **Proposal:** It generates a `prompt_rewrite` using Python `difflib` formatting, proposing an update to a specific agent's system prompt to handle the edge case.
 3. **Human-in-the-Loop:** The rewrite is logged into the `prompt_rewrites` table. It **is never automatically applied**. An admin must review it via `POST /rewrites/{id}/review`.
-4. **Validation:** Once approved, `POST /eval/run` executes the failed test cases again to verify if the new prompt improved the score.
+4. **Runtime Injection:** Once approved, `agents/overrides.py::apply_approved_prompt_rewrites()` uses module-level `setattr` to inject the new prompt constant into the relevant agent module at runtime — no container restart required.
+5. **Validation:** `POST /eval/run` executes the failed test cases again using the new prompt. A `delta_score` is computed and stored in `prompt_rewrites.delta_score`.
+
+**What the loop does NOT do:**
+- It does not auto-apply rewrites without human approval.
+- It does not modify database schema or migration files.
+- It does not run eval on passing test cases (targeted re-eval only).

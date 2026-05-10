@@ -68,9 +68,10 @@ class EvaluationHarness:
                   f"| correctness={result['answer_correctness']:.2f} "
                   f"| citation={result['citation_accuracy']:.2f}")
 
-            # Gemini free tier: 15 RPM — sleep between cases
+            # Gemini free tier: 15 RPM — sleep between cases to let quota recover
             if i < len(cases) - 1:
-                await asyncio.sleep(4)
+                print(f"  Waiting 70s for quota reset...")
+                await asyncio.sleep(70)
 
         total = sum(r["composite_score"] for r in results) / len(results) if results else 0.0
         print(f"\n=== Total Score: {total:.4f} ===\n")

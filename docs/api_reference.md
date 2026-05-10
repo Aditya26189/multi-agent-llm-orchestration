@@ -3,8 +3,10 @@
 This document details the 5 core FastAPI endpoints, their required JSON schemas, expected HTTP status codes, and the lifecycle of the Server-Sent Events (SSE) stream.
 
 ## Base URL
-All API endpoints are hosted locally at `http://localhost:8000`. 
+All API endpoints are hosted locally at `http://localhost:8000`.
 Interactive Swagger UI documentation is automatically generated at `http://localhost:8000/docs`.
+
+> **Note:** The LogQuery UI (trace viewer, rewrite history, eval comparison) runs as a separate service at `http://localhost:8001`.
 
 ---
 
@@ -33,7 +35,7 @@ The server implements a **keep-alive fallback**. Because LangGraph loops might b
 
 **Stream Event Types:**
 - `AGENT_START`: The Orchestrator has invoked a specific agent.
-- `TOKEN`: Real-time token usage updates.
+- `TOKEN`: Real-time token updates (emitted by Synthesis and Retrieval hop-2 only — other agents use JSON-mode which does not support streaming).
 - `TOOL_CALL_START` / `TOOL_CALL_END`: Marks the beginning and end of sandbox executions (e.g., SQL lookup).
 - `BUDGET_UPDATE`: Emitted asynchronously after the `ContextBudgetManager` registers token consumption.
 - `HANDOFF`: The Orchestrator has output a `RoutingDecision`.
@@ -59,6 +61,16 @@ event: DONE
 data: {"final_answer": "Paris is the capital of France."}
 ```
 
+### Error Response Format
+All errors follow this machine-readable schema:
+```json
+{
+  "error_code": "INJECTION_DETECTED",
+  "message": "Query rejected: prompt injection pattern detected.",
+  "job_id": null
+}
+```
+
 ---
 
 ## 2. Get Execution Trace
@@ -72,7 +84,7 @@ curl -X GET "http://localhost:8000/jobs/8fbe4a54-545c-49cc-8d8e-2c79e636f2ce/tra
 ```
 
 ### Response (200 OK)
-Returns a JSON array of `ExecutionEventSchema` objects ordered by sequence ID.
+Returns a unified JSON array of events across `execution_events`, `routing_decisions`, and `tool_calls`, ordered chronologically by timestamp.
 ```json
 [
   {
@@ -95,6 +107,15 @@ Returns a JSON array of `ExecutionEventSchema` objects ordered by sequence ID.
     "timestamp": "2026-05-08T20:55:41Z"
   }
 ]
+```
+
+### Error Response (404)
+```json
+{
+  "error_code": "JOB_NOT_FOUND",
+  "message": "No job found with ID: 8fbe4a54-...",
+  "job_id": "8fbe4a54-..."
+}
 ```
 
 ---
@@ -128,6 +149,16 @@ curl -X GET "http://localhost:8000/eval/latest"
 }
 ```
 
+### Error Response (404 — no runs yet)
+```json
+{
+  "error_code": "EVAL_NOT_READY",
+  "message": "No evaluation runs have completed yet. Run POST /eval/run first.",
+  "job_id": null,
+  "timestamp": "2026-05-10T00:00:00Z"
+}
+```
+
 ---
 
 ## 4. Review Prompt Rewrite
@@ -146,7 +177,7 @@ curl -X POST "http://localhost:8000/rewrites/b3c4d5e6/review" \
 
 ### Response
 - `200 OK`: `{"rewrite_id": "b3c4d5e6", "new_status": "approved", "message": "Rewrite approved. Run POST /eval/run to test the improved prompt."}`
-- `409 Conflict`: 
+- `409 Conflict`:
 ```json
 {
   "error_code": "REWRITE_ALREADY_REVIEWED",
@@ -154,7 +185,7 @@ curl -X POST "http://localhost:8000/rewrites/b3c4d5e6/review" \
   "job_id": null
 }
 ```
-- `404 Not Found`: 
+- `404 Not Found`:
 ```json
 {
   "error_code": "REWRITE_NOT_FOUND",
@@ -168,8 +199,7 @@ curl -X POST "http://localhost:8000/rewrites/b3c4d5e6/review" \
 ## 5. Re-run Evaluation
 **POST** `/eval/run`
 
-Triggers a background evaluation run. Returns immediately with a run_id.
-Poll `GET /eval/latest` to see results when complete.
+Triggers a background evaluation run. Returns immediately; poll `GET /eval/latest` to see results when complete.
 
 **Optional request body:**
 ```json
@@ -177,9 +207,9 @@ Poll `GET /eval/latest` to see results when complete.
 ```
 Omit body to run all 15 test cases.
 
-**Response (202 Accepted):**
+**Response (200 OK):**
 ```json
-{"message": "Evaluation started in background.", "run_id": "uuid"}
+{"message": "Evaluation started in background."}
 ```
 
 **Notes:**
@@ -187,3 +217,19 @@ Omit body to run all 15 test cases.
 - Each test case takes ~4 seconds (Gemini free tier rate limit)
 - Full 15-case run takes approximately 60-90 seconds
 - Results stored in `eval_results` table, queryable via `GET /eval/latest`
+- Use `MOCK_LLM=true` environment variable to bypass Gemini API calls during development (uses deterministic stub responses)
+
+**tc_11 execution note:** The adversarial injection test case is routed through the pipeline's internal injection handler (not the API-layer filter) when triggered by the harness, testing both layers independently.
+
+---
+
+## LogQuery Service (port 8001)
+
+The following analytical endpoints live in the separate LogQuery service and do **not** count toward the main API's 5-endpoint limit:
+
+| Endpoint | Description |
+|---|---|
+| `GET /` | Execution trace viewer UI |
+| `GET /rewrites` | List all prompt rewrites with status, timestamps, delta_score |
+| `GET /eval/compare?run_a=&run_b=` | Side-by-side score comparison between two eval runs |
+| `GET /trace?job_id=` | Full chronological event trace for a specific job |

@@ -100,8 +100,15 @@ stderr, and exit code.
 **Purpose:** Convert natural language to SQL and query PostgreSQL.
 Runs under `mega_ai_reader` (SELECT-only PostgreSQL role) — no DDL/DML possible.
 
+**NL→SQL mechanism:** The agent makes an LLM call to convert the natural language query into a `SELECT` statement. Pattern:
+```python
+sql_prompt = f"Convert to SQL for the 'document_chunks' table: {nl_query}. Return only the SELECT statement."
+sql = await agent_llm.generate(sql_prompt)
+# Validated to start with SELECT before execution
+```
+
 | Condition | Error Code | ToolAction | Orchestrator Behaviour |
-|-----------|-----------|------------|----------------------|
+|-----------|-----------|------------|------------------------|
 | Empty NL query | `INVALID_INPUT` | `SKIP_LOG_VIOLATION` | Log PolicyViolation, skip |
 | LLM generates non-SELECT SQL | `INVALID_INPUT` | `SKIP_LOG_VIOLATION` | Log PolicyViolation, skip |
 | DB connection timeout | `TIMEOUT` | `RETRY_SAME` | Retry once |

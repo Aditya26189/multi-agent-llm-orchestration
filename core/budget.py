@@ -1,7 +1,8 @@
 """
 Context Budget Manager — Gemini override.
 
-Token counting uses tiktoken o200k_base.
+Token counting uses genai.GenerativeModel.count_tokens() (native Gemini API).
+Falls back to len(text) // 4 if the API call fails.
 asyncio.Lock (never threading.Lock).
 Emits BUDGET_UPDATE SSE events on every consume().
 Raises BudgetOverflowError on overflow — NEVER silently truncates.

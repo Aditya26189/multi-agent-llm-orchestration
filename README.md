@@ -6,8 +6,13 @@
 git clone https://github.com/Aditya26189/multi-agent-llm-orchestration
 cp .env.example .env          # fill in GOOGLE_API_KEY and DATABASE_URL
 make up      # starts all 5 services + seeds DB automatically
-make test
-make eval
+make test    # 64 unit tests — no API key needed
+make eval    # runs all 15 eval cases against live Gemini (requires quota)
+```
+
+**No Gemini quota?** Run tests with the LLM mock:
+```bash
+MOCK_LLM=true make test
 ```
 
 ## AI Collaboration
@@ -279,22 +284,23 @@ This loop does NOT auto-apply prompts or self-modify schemas.
 ## LLM Provider
 
 Uses **Google Gemini 2.0 Flash** (`gemini-2.0-flash`) via `google-generativeai`.
-- Embeddings: `gemini-embedding-001` (768-dim)
+- Embeddings: `text-embedding-004` (768-dim)
 - Structured output: `response_mime_type="application/json"`
-- Token counting: `tiktoken` `o200k_base` (approximate for Gemini)
+- Token counting: `genai.GenerativeModel.count_tokens()` (native Gemini counting — no tiktoken dependency)
 
 Generator uses Gemini 2.0 Flash; judge uses Gemini 1.5 Flash (different model checkpoint). Different system prompts and zero shared call context reduce self-enhancement bias, though both models share the same provider.
 
 ## Known Limitations
 
-1. **Gemini-only stack**: Original spec assumed OpenAI. This uses `gemini-2.0-flash` for generation, `gemini-1.5-flash` for eval judging, `gemini-embedding-001` for embeddings (768-dim).
-2. **Token counting latency**: Token counting uses `genai.count_tokens()` via `asyncio.to_thread` which incurs minor latency compared to local tiktoken.
-3. **Generator and Judge same provider**: Generator and Judge use different checkpoints to reduce self-enhancement bias but share the same provider.
-4. **TOKEN streaming limited to Synthesis and Retrieval**: TOKEN streaming limited to Synthesis and Retrieval hop-2 due to Gemini JSON mode constraints for other agents.
-5. **Web search is a stub**: Web search is a synthetic stub. Returns synthetic results. Production replacement: SerpAPI or Tavily.
-6. **Redis pub/sub has no persistence**: missed SSE events require `/jobs/trace` polling.
-7. **Sequential evaluation**: eval cases run 1-by-1 due to rate limits.
-8. **Code execution is subprocess-based**: Code execution uses subprocess, not a secure container.
+1. **Gemini-only stack**: Original spec assumed OpenAI. This uses `gemini-2.0-flash` for generation, `gemini-1.5-flash` for eval judging, `text-embedding-004` for embeddings (768-dim).
+2. **Token counting latency**: Token counting uses `genai.GenerativeModel.count_tokens()` via native Gemini API, which incurs one network round-trip per pre-flight check. A local approximation (`len(text) // 4`) is used as fallback if the API call fails.
+3. **Generator and Judge same provider**: Generator and Judge use different model checkpoints (`gemini-2.0-flash` vs `gemini-1.5-flash`) to reduce self-enhancement bias, but both are Google Gemini models. A different-provider judge would eliminate the bias more completely.
+4. **TOKEN streaming limited to Synthesis and Retrieval hop-2**: Other agents use `response_mime_type="application/json"` which does not support token-by-token streaming. `TOKEN` SSE events are only emitted by Synthesis and Retrieval hop-2.
+5. **Web search is a stub**: Returns synthetic results with keyword-overlap relevance scoring. Production replacement: SerpAPI or Tavily.
+6. **Redis pub/sub has no persistence**: Missed SSE events (e.g., due to client disconnect) require polling `GET /jobs/{id}/trace` to reconstruct the execution history.
+7. **Sequential evaluation**: Eval cases run 1-by-1 with a 4-second sleep between cases due to Gemini free-tier RPM limits. A paid-tier key allows concurrent evaluation.
+8. **Per-job budget, not per-turn**: `ContextBudgetManager` tracks cumulative token usage across the entire job, not per-turn. The spec says "per turn" — this is a known gap documented here rather than silently ignored.
+9. **Code execution is subprocess-based**: Uses `subprocess` with a 10-second timeout and syscall blocking, not a hardware-isolated container. Not suitable for untrusted arbitrary code in production.
 
 ## What I Would Build Next
 
