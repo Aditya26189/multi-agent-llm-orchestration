@@ -138,6 +138,11 @@ The PostgreSQL database uses `pgvector` for similarity search and contains 10 co
 | `eval_results` | Per-test-case scores: all 6 dims + computed composite |
 | `prompt_rewrites` | Proposals from the Meta agent awaiting review |
 | `policy_violations` | Hard failures enforcing architecture limits (tokens, turns, tools) |
+| `routing_decisions` | Orchestrator routing log — next_agent, reasoning, confidence per turn |
+| `prompt_versions` | Historical tracking of active vs inactive system prompts |
+| `alembic_version` | Database migration version tracking (Alembic internal) |
+
+> Note: `alembic_version` is an Alembic migration tracking table, not an application table.
 
 ## Architecture
 
