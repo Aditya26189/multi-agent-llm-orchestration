@@ -125,7 +125,7 @@ based on component testing:
 
 ## Database Tables
 
-The PostgreSQL database uses `pgvector` for similarity search and contains 10 core tables:
+The PostgreSQL database uses `pgvector` for similarity search and contains 11 application tables (plus Alembic's internal migration tracker):
 
 | Table Name | Description |
 |------------|-------------|
