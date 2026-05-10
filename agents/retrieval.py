@@ -68,13 +68,14 @@ class RetrievalAgent(BaseAgent):
         self._db_url = os.environ["DATABASE_URL"]
         from db.session import AsyncSessionLocal
         self._session_factory = AsyncSessionLocal
+        self._client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 
     async def _embed(self, text: str) -> List[float]:
         """Gemini embedding model with retrieval_query task type."""
-        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+        client = self._client
         result = await asyncio.to_thread(
             client.models.embed_content,
-            model="gemini-embedding-001",
+            model="models/text-embedding-004",
             contents=text,
             config=types.EmbedContentConfig(
                 task_type="RETRIEVAL_QUERY",
@@ -112,7 +113,7 @@ class RetrievalAgent(BaseAgent):
     async def _formulate_followup(self, query: str, chunks: list) -> str:
         """LLM determines missing information and formulates 2nd hop query."""
         prompt = f"Query: {query}\nFound so far: {[c.text[:200] for c in chunks]}\nWhat is missing? Return ONLY the search query."
-        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+        client = self._client
         res = await asyncio.to_thread(
             client.models.generate_content,
             model="gemini-2.0-flash",

@@ -53,7 +53,7 @@ class ContextBudgetManager:
         self._context = context
         self._redis_pub = redis_pub
         self._lock = asyncio.Lock()  # MUST be asyncio.Lock, never threading.Lock
-        self._model = genai.GenerativeModel("models/gemini-2.0-flash")
+        self._model = genai.GenerativeModel("gemini-2.0-flash")
 
     def _count(self, text_or_tokens: "str | int") -> int:
         """Token count using genai."""

@@ -4,7 +4,7 @@ import time
 
 _lock = asyncio.Lock()
 _timestamps: list = []
-_CALLS_PER_MINUTE = 60  # conservative — leaves buffer for bursts
+_CALLS_PER_MINUTE = 12  # safe buffer under 15 RPM Gemini free tier
 
 async def wait(model_name: str = "default") -> None:
     global _timestamps
