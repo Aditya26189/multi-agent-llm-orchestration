@@ -243,20 +243,28 @@ async def critique_node(state: SharedContext) -> SharedContext:
     )
     return state
 
+async def tool_runner_node(state: SharedContext) -> SharedContext:
+    from agents.tool_runner import ToolRunnerAgent
+    from db.session import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        agent = ToolRunnerAgent(db=db)
+        await agent.run(state, _budget_mgr, _redis_pub)
+    return state
+
 async def synthesis_node(state: SharedContext) -> SharedContext:
     await _run_agent_with_budget_check(
         AgentID.SYNTHESIS.value, _agents_map[AgentID.SYNTHESIS], state, _budget_mgr, _redis_pub
     )
     return state
 
-def compression_node(state: SharedContext) -> SharedContext:
-    result = _run(_compression_agent.compress(
+async def compression_node(state: SharedContext) -> SharedContext:
+    result = await _compression_agent.compress(
         agent_id="compression",
         text=state.final_answer,
         target_tokens=1000,
         budget_mgr=_budget_mgr,
-        context=state
-    ))
+        context=state,
+    )
     state.final_answer = result
     return state
 
@@ -288,9 +296,18 @@ def route_decision(state: SharedContext) -> str:
         "critique": "critique",
         "synthesis": "synthesis",
         "compression": "compression",
+        "tool_runner": "tool_runner",
         "done": END,
     }
-    return agent_to_node.get(decision.next_agent.value, END)
+    node = agent_to_node.get(decision.next_agent.value)
+    if node is None:
+        context.violations.append(PolicyViolation(
+            agent_id="orchestrator",
+            violation_type="invalid_routing_decision",
+            details=f"LLM returned unknown agent: {decision.next_agent.value}",
+        ))
+        return END
+    return node
 
 def build_pipeline(orchestrator, agents_map, budget_mgr, redis_pub, compression_agent):
     """Call once per Celery task. Injects deps via module-level refs."""
@@ -308,6 +325,7 @@ def build_pipeline(orchestrator, agents_map, budget_mgr, redis_pub, compression_
     graph.add_node("critique",      critique_node)
     graph.add_node("synthesis",     synthesis_node)
     graph.add_node("compression",   compression_node)
+    graph.add_node("tool_runner",   tool_runner_node)
 
     graph.set_entry_point("orchestrator")
     graph.add_conditional_edges("orchestrator", route_decision)
@@ -316,5 +334,6 @@ def build_pipeline(orchestrator, agents_map, budget_mgr, redis_pub, compression_
     graph.add_edge("critique", "orchestrator")
     graph.add_edge("synthesis", "orchestrator")
     graph.add_edge("compression", "orchestrator")
+    graph.add_edge("tool_runner", "orchestrator")
 
     return graph.compile()

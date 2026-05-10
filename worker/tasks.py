@@ -46,6 +46,11 @@ def run_agent_pipeline(self, query: str, job_id: str) -> dict:
 
 
 async def _run_pipeline_async(query: str, job_id: str) -> dict:
+    from agents.overrides import apply_approved_prompt_rewrites
+    from db.session import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        await apply_approved_prompt_rewrites(db)
+
     if os.environ.get("MOCK_LLM") == "true":
         _apply_llm_mock()
     redis_pub = RedisPublisher(REDIS_URL)

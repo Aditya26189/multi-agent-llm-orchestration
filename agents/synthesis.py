@@ -137,6 +137,16 @@ class SynthesisAgent(BaseAgent):
                     source_chunk_id=None,
                 ))
 
+        # Fallback: catch sentences the LLM wrote without [CHUNK:] or [REASONING] prefix
+        tagged = {pe.sentence for pe in new_provenance}
+        for line in final_answer.splitlines():
+            line = line.strip()
+            if line and line not in tagged and not line.startswith("["):
+                new_provenance.append(ProvenanceEntry(
+                    sentence=line,
+                    source_agent=AgentID.SYNTHESIS,
+                    source_chunk_id=None,
+                ))
         context.provenance_map = new_provenance
 
         await budget_mgr.consume("synthesis", full_response)
