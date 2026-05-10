@@ -86,4 +86,4 @@ async def submit_query(request: Request, body: QueryRequest):
             await pubsub.aclose()
             await redis_client.aclose()
 
-    return EventSourceResponse(event_gen(), ping=15)
+    return EventSourceResponse(event_gen())
