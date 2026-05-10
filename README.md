@@ -137,7 +137,6 @@ The PostgreSQL database uses `pgvector` for similarity search and contains 10 co
 | `eval_runs` | Harness run metadata and aggregated run scores |
 | `eval_results` | Per-test-case scores: all 6 dims + computed composite |
 | `prompt_rewrites` | Proposals from the Meta agent awaiting review |
-| `prompt_versions` | Historical tracking of active vs inactive system prompts |
 | `policy_violations` | Hard failures enforcing architecture limits (tokens, turns, tools) |
 
 ## Architecture
@@ -207,18 +206,9 @@ docker compose exec db psql \
 "
 ```
 
-**Expected output format (example):**
-
-> Example shown is illustrative. Run `make eval` with a valid 
-> GOOGLE_API_KEY to populate real routing decisions.
-
-```
-next_agent  | retrieval
-reasoning   | Query is a single unambiguous factual lookup. Decomposition
-              would add one turn with zero information gain. Routing directly
-              to retrieval with the full query as the retrieval sub-task.
-confidence  | 0.94
-```
+> Run `make eval` with a valid GOOGLE_API_KEY to populate real routing 
+> decisions. The query above will return actual LLM reasoning and confidence 
+> scores from each orchestrator decision.
 
 The orchestrator is designed to dynamically adapt. For example, on a simple factual query ("What is the capital of France?"), it can identify that breaking it into sub-tasks would add latency with no benefit, skipping decomposition and routing directly to retrieval.
 
