@@ -109,36 +109,18 @@ Detailed documentation has been organized into the `/docs` directory:
 
 ## Baseline Comparison
 
-> **Note:** Scores below are projected based on component testing.
-> Live eval blocked by API quota exhaustion during submission window.
-> Run `make eval` with a valid GOOGLE_API_KEY to produce real scores.
+> **Note:** Live eval was blocked by API quota exhaustion during the submission
+> window. The pipeline reaches the LLM generation step successfully — the failure
+> is a free-tier rate limit, not a code defect. Run `make eval` with a valid
+> GOOGLE_API_KEY to produce real scores.
 
-To demonstrate the value of this multi-agent architecture, here is a simple performance comparison against a baseline zero-agent LLM (e.g., standard GPT-4o or Gemini 2.0 Flash) on our 30-document corpus.
-
-| Metric | Baseline (Zero-Agent) | MEGA-AI Pipeline |
-|--------|-----------------------|------------------|
-| **Accuracy (Adversarial)** | ~40–50% (accepts false premises) | 88.5% |
-| **Citation Accuracy** | 0% (no provenance) | 94.2% |
-| **Latency** | 2.5s | 14.8s (multi-turn reasoning) |
-| **Token Usage** | ~1k tokens | ~15k tokens (distributed across agents) |
-| **Cost** | ~$0.003 | ~$0.05 |
-
-## Why Multi-Agent? Baseline Comparison
-
-A zero-agent single LLM call (same model, no RAG, no critique) versus MEGA-AI:
-
-| Test Case | Category | Baseline | MEGA-AI | Delta |
-|-----------|----------|----------|---------|-------|
-| tc_01 Capital of France | BASELINE | 1.00 | 1.00 | 0.00 |
-| tc_05 Speed of light | BASELINE | 1.00 | 1.00 | 0.00 |
-| tc_07 ML performance | AMBIGUOUS | 0.40 | 0.82 | +0.42 |
-| tc_12 Einstein Nobel | ADVERSARIAL | 0.00 | 0.91 | +0.91 |
-| tc_14 Mars water | ADVERSARIAL | 0.20 | 0.85 | +0.65 |
-| tc_15 Tool abuse | ADVERSARIAL | 0.00 | 1.00 | +1.00 |
-
-Multi-agent orchestration adds the most value on adversarial cases where a single LLM call accepts false premises and ignores contradictions.
-
-*Conclusion*: MEGA-AI trades latency and token cost for absolute fact-checking, strict provenance, and robustness against false premises.
+The evaluation harness is fully implemented with 15 test cases across 3 tiers
+(BASELINE, AMBIGUOUS, ADVERSARIAL) and 6 scoring dimensions. Expected behavior
+based on component testing:
+- BASELINE cases (tc_01–tc_05): straightforward retrieval, expected high scores
+- AMBIGUOUS cases (tc_06–tc_10): tests decomposition quality
+- ADVERSARIAL cases (tc_11–tc_15): false premise detection, injection rejection,
+  contradiction resolution — where multi-agent adds most value over a zero-agent baseline
 
 ## Database Tables
 
@@ -224,7 +206,7 @@ docker compose exec db psql \
 "
 ```
 
-**Example output for a simple factual query (tc_01: "What is the capital of France?"):**
+**Expected output format (example):**
 
 ```
 next_agent  | retrieval
