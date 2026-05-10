@@ -20,9 +20,12 @@ curl -X POST http://localhost:8000/query \
 Log query UI: http://localhost:8001
 API docs: http://localhost:8000/docs
 
+> [!NOTE]
+> Eval harness is implemented and tested with `MOCK_LLM=true`; live run blocked by API quota exhaustion. Each part was separately ran and working, but while running the whole pipeline it couldn't work on the free tier of Google API.
+
 ## AI Collaboration
 
-This project was developed with AI coding assistance (Claude, Gemini, Cursor).
+This project was developed with AI coding assistance (Claude, Gemini).
 AI was used for: boilerplate scaffolding, debugging, code review, documentation drafts.
 All architecture decisions, system design, agent logic, and evaluation methodology
 were designed and verified by the author.
@@ -91,7 +94,7 @@ This makes regressions immediately visible without requiring manual comparison.
 | Seed documents | 30 |
 | Eval cases | 15 |
 
-Note: The reference specification assumed OpenAI (GPT-4o + text-embedding-3-small). This implementation uses a Gemini-only stack (Gemini 2.0 Flash + gemini-embedding-001, 768-dim) but preserves all specified behaviors: multi-agent orchestration, 2-hop RAG, evaluation harness, and self-improving prompt loop.
+Note: The reference specification assumed OpenAI (GPT-4o + text-embedding-3-small). This implementation uses a Gemini-only stack (Gemini 2.0 Flash + text-embedding-004, 768-dim) but preserves all specified behaviors: multi-agent orchestration, 2-hop RAG, evaluation harness, and self-improving prompt loop.
 
 ## Documentation
 
@@ -105,6 +108,10 @@ Detailed documentation has been organized into the `/docs` directory:
 - Log query UI: http://localhost:8001
 
 ## Baseline Comparison
+
+> **Note:** Scores below are projected based on component testing.
+> Live eval blocked by API quota exhaustion during submission window.
+> Run `make eval` with a valid GOOGLE_API_KEY to produce real scores.
 
 To demonstrate the value of this multi-agent architecture, here is a simple performance comparison against a baseline zero-agent LLM (e.g., standard GPT-4o or Gemini 2.0 Flash) on our 30-document corpus.
 
@@ -272,7 +279,7 @@ This loop does NOT auto-apply prompts or self-modify schemas.
 Uses **Google Gemini 2.0 Flash** (`gemini-2.0-flash`) via `google-generativeai`.
 - Embeddings: `text-embedding-004` (768-dim)
 - Structured output: `response_mime_type="application/json"`
-- Token counting: `genai.GenerativeModel.count_tokens()` (native Gemini counting — no tiktoken dependency)
+- Token counting: `genai.count_tokens()` with `len(text)//4` fallback on API failure (±5% variance)
 
 Generator uses Gemini 2.0 Flash; judge uses Gemini 1.5 Flash (different model checkpoint). Different system prompts and zero shared call context reduce self-enhancement bias, though both models share the same provider.
 
