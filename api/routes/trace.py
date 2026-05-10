@@ -1,3 +1,4 @@
+import uuid as _uuid
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,15 @@ router = APIRouter()
     summary="Get full execution trace for a completed job",
 )
 async def get_trace(job_id: str, db: AsyncSession = Depends(get_db)):
+    # Validate UUID format before hitting DB to avoid DBAPIError 500
+    try:
+        _uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail={
+            "error_code": "JOB_NOT_FOUND",
+            "message": f"No job exists with ID: {job_id}",
+            "job_id": job_id,
+        })
     """
     Returns the complete execution trace: all agent decisions, tool calls,
     and handoffs in chronological order for the given job_id.

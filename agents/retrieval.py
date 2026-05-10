@@ -83,6 +83,17 @@ class RetrievalAgent(BaseAgent):
         )
         return result.embeddings[0].values
 
+    async def _vector_search(self, query: str, limit: int = 5, hop: int = 1):
+        embedding = await self._embed(query)
+        emb_literal = "[" + ",".join(str(x) for x in embedding) + "]"
+
+        sql = f"""
+            SELECT id, content, source_url,
+                1 - (embedding <=> '{emb_literal}'::vector(768)) AS relevance
+            FROM document_chunks
+            ORDER BY embedding <=> '{emb_literal}'::vector(768)
+            LIMIT :limit
+        """
         async with self._session_factory() as db:
             rows = await db.execute(text(sql), {"limit": limit})
             result = rows.fetchall()
