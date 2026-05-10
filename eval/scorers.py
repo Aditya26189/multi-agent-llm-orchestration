@@ -49,6 +49,13 @@ def _keyword_overlap(sentence: str, chunk_text: str) -> float:
     return len(s_words.intersection(c_words)) / len(s_words)
 
 
+def _content_match(sentence: str, chunk_text: str) -> bool:
+    """At least 2 non-stopword words must overlap between sentence and chunk."""
+    stopwords = {"the", "a", "an", "is", "in", "of", "to", "and", "for", "it", "was", "be"}
+    s_words = set(sentence.lower().split()) - stopwords
+    c_words = set(chunk_text.lower().split()) - stopwords
+    return len(s_words & c_words) >= 2
+
 def score_citation_accuracy(context: SharedContext) -> Tuple[float, str]:
     if not context.provenance_map:
         return 0.0, "No provenance map found — retrieval agent did not produce citations"
@@ -60,19 +67,11 @@ def score_citation_accuracy(context: SharedContext) -> Tuple[float, str]:
 
     for entry in context.provenance_map:
         if entry.source_chunk_id is None:
-            valid += 1  # [REASONING] entries are always valid
-            details.append(f"[REASONING] '{entry.sentence[:40]}...' — valid")
-        elif entry.source_chunk_id in valid_chunk_ids:
-            # 2-step validation: ID is valid, now check semantic overlap
-            chunk_text = valid_chunk_ids[entry.source_chunk_id]
-            overlap = _keyword_overlap(entry.sentence, chunk_text)
-            if overlap > 0.3:
-                valid += 1
-                details.append(f"[CHUNK:{entry.source_chunk_id}] — valid (overlap {overlap:.2f})")
-            else:
-                details.append(f"[CHUNK:{entry.source_chunk_id}] — INVALID (overlap {overlap:.2f} too low)")
-        else:
-            details.append(f"[CHUNK:{entry.source_chunk_id}] — INVALID (not in retrieved set)")
+            continue
+        chunk_text = valid_chunk_ids.get(entry.source_chunk_id)
+        if chunk_text and _content_match(entry.sentence, chunk_text):
+            valid += 1
+        total += 1
 
     score = valid / total if total > 0 else 0.0
     justification = f"{valid}/{total} citations valid. " + "; ".join(details[:5])
