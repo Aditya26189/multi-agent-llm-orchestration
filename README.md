@@ -21,7 +21,8 @@ Log query UI: http://localhost:8001
 API docs: http://localhost:8000/docs
 
 > [!NOTE]
-> Eval harness is implemented and tested with `MOCK_LLM=true`; live run blocked by API quota exhaustion. Each part was separately ran and working, but while running the whole pipeline it couldn't work on the free tier of Google API.
+> Pipeline reaches LLM generation successfully with a valid API key. 
+> Full 15-case eval blocked by free-tier quota during submission window.
 
 ## AI Collaboration
 
@@ -208,6 +209,9 @@ docker compose exec db psql \
 
 **Expected output format (example):**
 
+> Example shown is illustrative. Run `make eval` with a valid 
+> GOOGLE_API_KEY to populate real routing decisions.
+
 ```
 next_agent  | retrieval
 reasoning   | Query is a single unambiguous factual lookup. Decomposition
@@ -216,25 +220,9 @@ reasoning   | Query is a single unambiguous factual lookup. Decomposition
 confidence  | 0.94
 ```
 
-The orchestrator **skipped decomposition** for tc_01 — identifying that
-breaking "What is the capital of France?" into sub-tasks would add latency
-with no benefit. A hardcoded chain would always run all 4 agents regardless
-of query complexity.
+The orchestrator is designed to dynamically adapt. For example, on a simple factual query ("What is the capital of France?"), it can identify that breaking it into sub-tasks would add latency with no benefit, skipping decomposition and routing directly to retrieval.
 
-**Example output for an adversarial query (tc_15: tool abuse spiral):**
-
-```
-next_agent  | synthesis
-reasoning   | MAX_TOOL_CALLS_PER_JOB limit reached (20/20). Pipeline has
-              exhausted its tool budget. Routing directly to synthesis with
-              available context to prevent infinite tool loop. PolicyViolation
-              logged: tool_abuse.
-confidence  | 0.99
-```
-
-Here the orchestrator detected tool call spiralling and **forced early
-synthesis** — producing a partial answer with an honest caveat rather than
-continuing to call tools indefinitely.
+Likewise, on adversarial queries causing a tool abuse spiral, the orchestrator detects when the tool budget limit is reached and forces early synthesis—producing a partial answer with an honest caveat rather than continuing to call tools indefinitely.
 
 **How routing decisions are stored:**
 
