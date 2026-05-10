@@ -31,7 +31,8 @@ filter. Both layers are tested: the API filter via integration test, the
 pipeline internals via the eval harness.
 
 ### Response Lifecycle & Fallback
-The server implements a **keep-alive fallback**. Because LangGraph loops might block for several seconds during heavy LLM generation, the API emits an empty `ping` event every 15 seconds to prevent client-side HTTP timeouts (like those enforced by Nginx or browser fetch APIs).
+### Response Lifecycle & Fallback
+Note: Keep-alive ping events are not currently enabled. Reconnect via GET /jobs/{id}/trace if the stream drops.
 
 **Stream Event Types:**
 - `AGENT_START`: The Orchestrator has invoked a specific agent.
@@ -45,9 +46,6 @@ The server implements a **keep-alive fallback**. Because LangGraph loops might b
 
 **Example SSE Trace:**
 ```text
-event: ping
-data: {}
-
 event: AGENT_START
 data: {"agent_id": "orchestrator", "job_id": "8fbe4a54-..."}
 
@@ -131,6 +129,7 @@ curl -X GET "http://localhost:8000/eval/latest"
 ```
 
 ### Response (200 OK)
+> Example response format. Actual scores depend on eval run results.
 ```json
 {
   "run_id": "a1b2c3d4-...",
