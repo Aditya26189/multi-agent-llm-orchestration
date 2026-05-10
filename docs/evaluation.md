@@ -103,7 +103,7 @@ seed document. Specifically:
 This was verified by running:
 ```bash
 python scripts/leakage_check.py
-# Output: 0 ground truth strings found verbatim in seed documents
+# Expected output: 0 ground truth strings found verbatim in seed documents
 ```
 
 ---

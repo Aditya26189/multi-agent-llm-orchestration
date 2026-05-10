@@ -87,7 +87,7 @@ A lightweight Flask application on port 8001.
 
 1. **Submission:** Client sends `POST /query`.
 2. **Validation:** API checks for basic prompt injections. If safe, generates a UUID `job_id`.
-3. **Dispatch:** API pushes the task to Redis. The API immediately subscribes to the Redis Pub/Sub channel for `job_id` and starts sending SSE keep-alive `ping` events.
+3. **Dispatch:** API pushes the task to Redis. The API immediately subscribes to the Redis Pub/Sub channel for `job_id`.
 4. **Initialization:** The Celery Worker dequeues the task, builds a `SharedContext`, declares all 7 agent budgets, then hands the context to the Orchestrator.
 5. **Multi-Agent Loop:** The Orchestrator routes the context through Decomposition, Retrieval, Critique, and Synthesis. During this, the worker publishes live updates back to Redis.
 6. **Completion:** Synthesis finishes. The Worker persists the final `SharedContext` state to PostgreSQL and publishes a `DONE` event.

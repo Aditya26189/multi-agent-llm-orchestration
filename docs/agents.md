@@ -89,7 +89,7 @@ MEGA-AI implements a highly secure, parallel-safe budget tracking system. Budget
 | `compression` | 8,192 |
 | `meta` | 4,096 |
 
-- **Tokenizer:** It uses `genai.GenerativeModel.count_tokens()` to accurately calculate Gemini token consumption, incurring a small network latency per pre-flight check rather than relying on local approximation.
+- **Tokenizer:** It uses `genai.count_tokens()` with a `len(text)//4` fallback on API failure (±5% variance) to calculate Gemini token consumption.
 - **Pre-flight Check:** Before executing any agent, `preflight_check(agent_id, text)` is called. If the estimated token addition would overflow the remaining budget, the agent is skipped and a `PolicyViolation` is logged.
 - **Thread Safety:** Because Celery workers may execute subtasks asynchronously, the budget registry is protected by an `asyncio.Lock` to prevent race conditions during token counting.
 - **No Silent Truncation:** Unlike systems that silently drop messages when limits are reached, MEGA-AI explicitly raises a `BudgetOverflowError` and logs a `policy_violations` entry, guaranteeing that all token limits are fully auditable.
