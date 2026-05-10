@@ -10,3 +10,5 @@ dist/
 htmlcov/
 
 venv
+
+private-docs
