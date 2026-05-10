@@ -4,7 +4,7 @@ import time
 
 _lock = asyncio.Lock()
 _timestamps: list = []
-_CALLS_PER_MINUTE = 10  # conservative — leaves buffer for bursts
+_CALLS_PER_MINUTE = 60  # conservative — leaves buffer for bursts
 
 async def wait(model_name: str = "default") -> None:
     global _timestamps

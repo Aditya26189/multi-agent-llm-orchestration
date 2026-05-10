@@ -66,11 +66,12 @@ class ContextBudgetManager:
 
     def declare_budget(self, agent_id: str, max_tokens: int) -> None:
         """Synchronous — call before any async operations."""
-        self._context.budget_registry[agent_id] = BudgetEntry(
-            agent_id=agent_id,
-            max_tokens=max_tokens,
-            used_tokens=0,
-        )
+        if agent_id not in self._context.budget_registry:
+            self._context.budget_registry[agent_id] = BudgetEntry(
+                agent_id=agent_id,
+                max_tokens=max_tokens,
+                used_tokens=0,
+            )
 
     def check_remaining(self, agent_id: str) -> int:
         entry = self._context.budget_registry.get(agent_id)

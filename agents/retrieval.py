@@ -66,6 +66,8 @@ class RetrievalAgent(BaseAgent):
     def __init__(self):
         super().__init__()
         self._db_url = os.environ["DATABASE_URL"]
+        from db.session import AsyncSessionLocal
+        self._session_factory = AsyncSessionLocal
 
     async def _embed(self, text: str) -> List[float]:
         """Gemini embedding model with retrieval_query task type."""
@@ -81,33 +83,24 @@ class RetrievalAgent(BaseAgent):
         )
         return result.embeddings[0].values
 
-    async def _vector_search(self, query: str, limit: int = 5, hop: int = 1):
-        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-        from sqlalchemy.ext.asyncio import async_sessionmaker
-
-        engine = create_async_engine(self._db_url)
-        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-        embedding = await self._embed(query)
-        emb_literal = "[" + ",".join(str(x) for x in embedding) + "]"
-
-        sql = f"""
-            SELECT id, content, source_url,
-                1 - (embedding <=> '{emb_literal}'::vector(768)) AS relevance
-            FROM document_chunks
-            ORDER BY embedding <=> '{emb_literal}'::vector(768)
-            LIMIT :limit
-        """
-        async with session_factory() as db:
+        async with self._session_factory() as db:
             rows = await db.execute(text(sql), {"limit": limit})
             result = rows.fetchall()
 
-        await engine.dispose()
-        return result
+        return [
+            Chunk(
+                id=str(row.id),
+                text=row.content,
+                source_url=row.source_url,
+                relevance_score=float(row.relevance),
+                hop_number=hop,
+            )
+            for row in result
+        ]
 
     async def _formulate_followup(self, query: str, chunks: list) -> str:
         """LLM determines missing information and formulates 2nd hop query."""
-        prompt = f"Query: {query}\nFound so far: {[c.content[:200] for c in chunks]}\nWhat is missing? Return ONLY the search query."
+        prompt = f"Query: {query}\nFound so far: {[c.text[:200] for c in chunks]}\nWhat is missing? Return ONLY the search query."
         client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
         res = await asyncio.to_thread(
             client.models.generate_content,
@@ -140,7 +133,7 @@ class RetrievalAgent(BaseAgent):
             return
 
         chunks_text = "\n\n".join(
-            f"[CHUNK:{c.id}]: {c.content[:400]}" for c in hop1_chunks
+            f"[CHUNK:{c.id}]: {c.text[:400]}" for c in hop1_chunks
         )
         prompt_hop1 = RETRIEVAL_PROMPT_HOP1.format(
             query=context.query,

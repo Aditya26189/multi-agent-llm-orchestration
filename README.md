@@ -301,7 +301,12 @@ Generator uses Gemini 2.0 Flash; judge uses Gemini 1.5 Flash (different model ch
 7. **Sequential evaluation**: Eval cases run 1-by-1 with a 4-second sleep between cases due to Gemini free-tier RPM limits. A paid-tier key allows concurrent evaluation.
 8. **Per-job budget, not per-turn**: `ContextBudgetManager` tracks cumulative token usage across the entire job, not per-turn. The spec says "per turn" — this is a known gap documented here rather than silently ignored.
 9. **Code execution is subprocess-based**: Uses `subprocess` with a 10-second timeout and syscall blocking, not a hardware-isolated container. Not suitable for untrusted arbitrary code in production.
-
+10. **ToolRunnerAgent dead code**: The `ToolRunnerAgent` is implemented but never added to the agent graph or initialized in `orchestrator.py`.
+11. **overrides.py dead code**: The dynamic prompt override mechanism is implemented but currently unused by the main execution loop.
+12. **trace.py missing routing decisions**: The `/jobs/trace` endpoint omits data from the `routing_decisions` table.
+13. **_run_pipeline_for_eval dead code**: `_run_pipeline_for_eval` exists but the current evaluation harness calls `_run_pipeline_async`.
+14. **asyncio.run() in ThreadPoolExecutor**: Running async code inside ThreadPoolExecutors is an anti-pattern used here for convenience.
+15. **SQL injection via embedding**: The pgvector implementation has theoretical vulnerability to SQL injection via unescaped string literals when casting embeddings.
 ## What I Would Build Next
 
 - Replace stub web search with SerpAPI integration

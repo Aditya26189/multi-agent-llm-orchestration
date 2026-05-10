@@ -88,6 +88,15 @@ class EvaluationHarness:
             final_answer = "REJECTED: prompt injection detected." if injection.is_injection else tc["query"]
             from core.context import SharedContext
             context = SharedContext(query=tc["query"])
+            # Injection cases: only score correctness, rest are N/A
+            s_cite, j_cite = 1.0, "N/A — injection case, no retrieval"
+            s_contra, j_contra = 1.0, "N/A — injection case"
+            s_tool, j_tool = 1.0, "N/A — injection case"
+            s_budget, j_budget = 1.0, "N/A — injection case"
+            s_agree, j_agree = 1.0, "N/A — injection case"
+            s_correct, j_correct = score_answer_correctness(
+                final_answer, tc.get("ground_truth"), self.judge_model
+            )
         else:
             from worker.tasks import _run_pipeline_async
             
@@ -101,19 +110,19 @@ class EvaluationHarness:
             context = res["context"]
             final_answer = res["final_answer"]
 
-        # Score all 6 dimensions
-        s_correct, j_correct = score_answer_correctness(
-            final_answer, tc.get("ground_truth"), self.judge_model
-        )
-        s_cite, j_cite = score_citation_accuracy(context)
-        s_contra, j_contra = score_contradiction_resolution(context)
-        s_tool, j_tool = score_tool_efficiency(
-            context,
-            tc.get("expected_min_tool_calls", 1),
-            tc.get("expected_max_tool_calls", 5),
-        )
-        s_budget, j_budget = score_budget_compliance(context)
-        s_agree, j_agree = score_critique_agreement(context)
+            # Score all 6 dimensions
+            s_correct, j_correct = score_answer_correctness(
+                final_answer, tc.get("ground_truth"), self.judge_model
+            )
+            s_cite, j_cite = score_citation_accuracy(context)
+            s_contra, j_contra = score_contradiction_resolution(context)
+            s_tool, j_tool = score_tool_efficiency(
+                context,
+                tc.get("expected_min_tool_calls", 1),
+                tc.get("expected_max_tool_calls", 5),
+            )
+            s_budget, j_budget = score_budget_compliance(context)
+            s_agree, j_agree = score_critique_agreement(context)
 
         scores = {
             "answer_correctness": s_correct,

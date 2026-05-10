@@ -150,6 +150,7 @@ class PolicyViolation(BaseModel):
     violation_type: Literal[
         "budget_overflow", "direct_agent_call", "tool_retry_exceeded",
         "schema_invalid", "injection_detected", "max_turns_exceeded", "tool_abuse",
+        "invalid_routing_decision",
     ]
     details: str
     tokens_over_budget: Optional[int] = None

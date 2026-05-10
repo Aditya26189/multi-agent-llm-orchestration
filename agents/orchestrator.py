@@ -250,13 +250,14 @@ async def synthesis_node(state: SharedContext) -> SharedContext:
     return state
 
 def compression_node(state: SharedContext) -> SharedContext:
-    _run(_compression_agent.compress(
+    result = _run(_compression_agent.compress(
         agent_id="compression",
         text=state.final_answer,
         target_tokens=1000,
         budget_mgr=_budget_mgr,
         context=state
     ))
+    state.final_answer = result
     return state
 
 def orchestrator_node(state: SharedContext) -> SharedContext:
