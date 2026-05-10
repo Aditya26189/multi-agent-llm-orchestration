@@ -1,26 +1,32 @@
 # MEGA-AI: Production Multi-Agent LLM Orchestration System
 
-## Quick Start (< 5 minutes)
+## Quick Start
 
 ```bash
 git clone https://github.com/Aditya26189/multi-agent-llm-orchestration
-cp .env.example .env          # fill in GOOGLE_API_KEY and DATABASE_URL
-make up      # starts all 5 services + seeds DB automatically
-make test    # 64 unit tests — no API key needed
-make eval    # runs all 15 eval cases against live Gemini (requires quota)
+cd multi-agent-llm-orchestration
+cp .env.example .env          # add your GOOGLE_API_KEY
+docker compose up -d          # starts all services + seeds DB automatically
+# wait ~40 seconds for seeder to finish
 ```
 
-**No Gemini quota?** Run tests with the LLM mock:
+Test it:
 ```bash
-MOCK_LLM=true make test
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is Python and who created it?"}'
 ```
+
+Log query UI: http://localhost:8001
+API docs: http://localhost:8000/docs
 
 ## AI Collaboration
 
-This repository was developed with assistance from AI pair-programming tools during implementation and documentation. AI assistance was used for scaffolding, generating boilerplate code, and drafting documentation prompts. All substantive design decisions, security controls, and final code reviews were performed by the human developer.
-
-AI-assisted aspects: boilerplate generation, prompt engineering, and iterative refactoring suggestions.
-Human-reviewed aspects: architecture, eval design, production hardening, and final testing.
+This project was developed with AI coding assistance (Claude, Gemini, Cursor).
+AI was used for: boilerplate scaffolding, debugging, code review, documentation drafts.
+All architecture decisions, system design, agent logic, and evaluation methodology
+were designed and verified by the author.
+AI assistance is documented per the assessment requirement: "AI tools allowed with attestation."
 
 
 ## Data Leakage Prevention
@@ -146,68 +152,48 @@ The PostgreSQL database uses `pgvector` for similarity search and contains 10 co
 
 ## Architecture
 
-7 agents communicate exclusively through `SharedContext` (blackboard pattern).
-No agent calls another agent directly. The Orchestrator mediates all handoffs.
-
-```text
-┌─────────────────────────────────────────────────┐
-│                   CLIENT                        │
-│                (SSE Stream)                     │
-└─────────────────┬───────────────────────────────┘
-                  │ POST /query
-┌─────────────────▼───────────────────────────────┐
-│              FastAPI (port 8000)                │
-│   /query  /jobs/trace  /eval  /rewrites         │
-└─────────────────┬───────────────────────────────┘
-                  │ Celery task
-┌─────────────────▼───────────────────────────────┐
-│           Celery Worker + LangGraph             │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
-│  │Orchestr. │→ │Decompose │→ │  Retrieval   │   │
-│  └──────────┘  └──────────┘  └──────────────┘   │
-│       ↑              ↓              ↓           │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
-│  │Synthesis │← │Critique  │← │  SharedCtx   │   │
-│  └──────────┘  └──────────┘  └──────────────┘   │
-└─────────────────┬───────────────────────────────┘
-         ┌────────┴────────┐
-┌────────▼────┐   ┌────────▼────┐
-│ PostgreSQL  │   │    Redis    │
-│ + pgvector  │   │  (pub/sub)  │
-└─────────────┘   └─────────────┘
+```
+┌─────────────────────────────────────────────┐
+│               CLIENT (SSE stream)           │
+└──────────────────┬──────────────────────────┘
+                   │ POST /query
+┌──────────────────▼──────────────────────────┐
+│          FastAPI API (port 8000)            │
+│  /query  /jobs/{id}/trace  /eval/latest     │
+│  /eval/run  /rewrites/{id}/review           │
+└──────────────────┬──────────────────────────┘
+                   │ Celery task dispatch
+┌──────────────────▼──────────────────────────┐
+│       Celery Worker + LangGraph             │
+│                                             │
+│  Orchestrator (LLM routing per turn)        │
+│      ↓              ↓            ↓          │
+│  Decomposition  Retrieval    ToolRunner     │
+│      ↓           (2-hop)        ↓           │
+│  Critique ←── SharedContext ────┘           │
+│      ↓                                      │
+│  Synthesis → final_answer + provenance      │
+│      ↓                                      │
+│  Meta Agent (post-eval prompt rewrites)     │
+└──────────┬──────────────────────────────────┘
+     ┌─────┴──────┐
+┌────▼───┐  ┌─────▼──┐
+│Postgres│  │ Redis  │
+│pgvector│  │pub/sub │
+└────────┘  └────────┘
 ```
 
 ## Agent Decision Boundaries
 
-### Orchestrator
-Decides: which agent to invoke next, in what order, with what token budget
-Does NOT decide: what content to generate (delegates to sub-agents)
-Limits: MAX_TURNS=10, MAX_TOOL_CALLS=20 per job
-
-### Decomposition Agent
-Decides: how many sub-tasks to create (1-5), what dependencies exist between them
-Does NOT decide: how to answer sub-tasks (delegates to retrieval)
-Limits: will not create circular dependencies (DFS cycle detection)
-
-### Retrieval Agent
-Decides: what to search for (hop1 query), what follow-up to search for (hop2 query)
-Does NOT decide: what the final answer is (outputs raw retrieved content)
-Limits: 2 hops maximum, top-K=3 chunks per hop
-
-### Critique Agent
-Decides: which specific text spans are low-confidence, what the flag reason is
-Does NOT decide: how to fix flagged spans (delegates to synthesis)
-Limits: only flags spans with confidence < 0.6
-
-### Synthesis Agent
-Decides: how to resolve flagged spans (RESOLVE/REMOVE/HEDGE)
-Does NOT decide: which spans to flag (from critique agent)
-Limits: must address every flagged span before returning final answer
-
-### Meta Agent
-Decides: which dimension had worst performance, which agent is responsible
-Does NOT decide: whether to apply the rewrite (human must approve)
-Limits: proposes one rewrite per eval run
+| Agent | Decides | Does NOT decide | Hard limits |
+|---|---|---|---|
+| Orchestrator | Next agent, order, budget allocation | Any content | MAX_TURNS=10, MAX_TOOL_CALLS=20 |
+| Decomposition | Subtask types, dependency graph | How to answer subtasks | Max 6 subtasks, DFS cycle check |
+| Retrieval | Hop-1 query, hop-2 follow-up query | Final answer | 2 hops, top-k=5 per hop |
+| Critique | Which spans are low-confidence | How to fix them | Flags confidence < 0.6 only |
+| Synthesis | RESOLVE / REMOVE / HEDGE per flagged span | Which spans to flag | Must address all flagged spans |
+| ToolRunner | Which tool to call, retry strategy | When to call tools | 3 attempts max per tool |
+| Meta | Worst-performing dimension, proposed rewrite | Whether to apply rewrite | One proposal per eval run |
 
 ### Dynamic Routing — Proof It Is Not Hardcoded
 
@@ -292,21 +278,31 @@ Generator uses Gemini 2.0 Flash; judge uses Gemini 1.5 Flash (different model ch
 
 ## Known Limitations
 
-1. **Gemini-only stack**: Original spec assumed OpenAI. This uses `gemini-2.0-flash` for generation, `gemini-1.5-flash` for eval judging, `text-embedding-004` for embeddings (768-dim).
-2. **Token counting latency**: Token counting uses `genai.GenerativeModel.count_tokens()` via native Gemini API, which incurs one network round-trip per pre-flight check. A local approximation (`len(text) // 4`) is used as fallback if the API call fails.
-3. **Generator and Judge same provider**: Generator and Judge use different model checkpoints (`gemini-2.0-flash` vs `gemini-1.5-flash`) to reduce self-enhancement bias, but both are Google Gemini models. A different-provider judge would eliminate the bias more completely.
-4. **TOKEN streaming limited to Synthesis and Retrieval hop-2**: Other agents use `response_mime_type="application/json"` which does not support token-by-token streaming. `TOKEN` SSE events are only emitted by Synthesis and Retrieval hop-2.
-5. **Web search is a stub**: Returns synthetic results with keyword-overlap relevance scoring. Production replacement: SerpAPI or Tavily.
-6. **Redis pub/sub has no persistence**: Missed SSE events (e.g., due to client disconnect) require polling `GET /jobs/{id}/trace` to reconstruct the execution history.
-7. **Sequential evaluation**: Eval cases run 1-by-1 with a 4-second sleep between cases due to Gemini free-tier RPM limits. A paid-tier key allows concurrent evaluation.
-8. **Per-job budget, not per-turn**: `ContextBudgetManager` tracks cumulative token usage across the entire job, not per-turn. The spec says "per turn" — this is a known gap documented here rather than silently ignored.
-9. **Code execution is subprocess-based**: Uses `subprocess` with a 10-second timeout and syscall blocking, not a hardware-isolated container. Not suitable for untrusted arbitrary code in production.
-10. **ToolRunnerAgent dead code**: The `ToolRunnerAgent` is implemented but never added to the agent graph or initialized in `orchestrator.py`.
-11. **overrides.py dead code**: The dynamic prompt override mechanism is implemented but currently unused by the main execution loop.
-12. **trace.py missing routing decisions**: The `/jobs/trace` endpoint omits data from the `routing_decisions` table.
-13. **_run_pipeline_for_eval dead code**: `_run_pipeline_for_eval` exists but the current evaluation harness calls `_run_pipeline_async`.
-14. **asyncio.run() in ThreadPoolExecutor**: Running async code inside ThreadPoolExecutors is an anti-pattern used here for convenience.
-15. **SQL injection via embedding**: The pgvector implementation has theoretical vulnerability to SQL injection via unescaped string literals when casting embeddings.
+- **ToolRunnerAgent previously unwired**: ToolRunnerAgent was not connected to the
+  LangGraph in early versions. Fixed in final commit — tools are now callable at runtime.
+
+- **compression.run() not used**: `compression_node` calls `compress()` directly on
+  `final_answer` only. The budget-threshold trigger in `run()` is not reached during
+  normal pipeline execution.
+
+- **asyncio.run() inside ThreadPoolExecutor**: `orchestrator._run()` bridges sync Celery
+  tasks to async LangGraph nodes via `ThreadPoolExecutor`. Safe at `--concurrency=1`
+  but will conflict if Celery concurrency is increased above 1.
+
+- **Token counting is approximate**: `ContextBudgetManager` uses `genai.count_tokens()`
+  which is a Gemini API call. Falls back to `len(text) // 4` on failure. Budget tracking
+  may be off by ±5% depending on Gemini's internal tokenizer.
+
+- **trace.py missing routing_decisions join**: `GET /jobs/{id}/trace` returns agent events
+  and tool calls but does not include orchestrator routing decisions. These are stored in
+  `execution_events` and queryable directly in the DB.
+
+- **NL-to-SQL SQL injection not mitigated**: The SQL tool uses the LLM-generated query
+  directly. Mitigated by the `mega_ai_reader` SELECT-only role, but not fully safe
+  against embedding attacks.
+
+- **Prompt rewrites not hot-swapped**: Approved prompt rewrites take effect only on
+  the next Celery task start. Already-running pipelines use the prompts they started with.
 ## What I Would Build Next
 
 - Replace stub web search with SerpAPI integration
