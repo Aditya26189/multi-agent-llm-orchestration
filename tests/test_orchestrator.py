@@ -117,6 +117,7 @@ async def test_route_uses_llm_response_when_valid(monkeypatch):
     import agents.orchestrator as orch_module
 
     orch = Orchestrator.__new__(Orchestrator)
+    orch._client = MagicMock()
     mock_response = MagicMock()
     mock_response.text = json.dumps({
         "next_agent": "retrieval",
@@ -145,6 +146,7 @@ async def test_route_falls_back_on_invalid_agent_name(monkeypatch):
     import asyncio
 
     orch = Orchestrator.__new__(Orchestrator)
+    orch._client = MagicMock()
     mock_response = MagicMock()
     mock_response.text = json.dumps({
         "next_agent": "INVALID_AGENT_NAME",

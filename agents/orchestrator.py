@@ -48,12 +48,9 @@ next_agent must be one of: decomposition, retrieval, critique, synthesis, compre
 class Orchestrator:
     def __init__(self):
         import os
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-        self._model = genai.GenerativeModel(
-            "gemini-2.0-flash",
-            generation_config={"response_mime_type": "application/json"},
-        )
+        from google import genai
+        api_key = os.environ.get("GOOGLE_API_KEY_ORCHESTRATOR") or os.environ.get("GOOGLE_API_KEY")
+        self._client = genai.Client(api_key=api_key)
 
     async def route(
         self,
@@ -121,7 +118,14 @@ class Orchestrator:
 
         start = time.monotonic()
         try:
-            raw = await asyncio.to_thread(self._model.generate_content, prompt)
+            from google.genai import types
+            config = types.GenerateContentConfig(response_mime_type="application/json")
+            raw = await asyncio.to_thread(
+                self._client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=config,
+            )
             raw_text = raw.text if hasattr(raw, "text") else "{}"
             data = json.loads(raw_text)
             latency = (time.monotonic() - start) * 1000
@@ -200,18 +204,6 @@ _orchestrator = None
 _agents_map = None
 _compression_agent = None
 
-def _run(coro):
-    try:
-        loop = asyncio.get_running_loop()
-        # Already inside a running loop (LangGraph context) — use a thread
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, coro)
-            return future.result()
-    except RuntimeError:
-        # No running loop — safe to call asyncio.run directly
-        return asyncio.run(coro)
-
 async def _run_agent_with_budget_check(agent_id: str, agent, context, budget_mgr, redis_pub):
     try:
         budget_mgr.assert_compliant(agent_id)
@@ -268,25 +260,30 @@ async def compression_node(state: SharedContext) -> SharedContext:
     state.final_answer = result
     return state
 
-def orchestrator_node(state: SharedContext) -> SharedContext:
+async def orchestrator_node(state: SharedContext) -> SharedContext:
     if state.status == "done" or state.turn >= MAX_TURNS:
         return state
-    decision = _run(_orchestrator.route(state, _budget_mgr, _redis_pub))
+    decision = await _orchestrator.route(state, _budget_mgr, _redis_pub)
     state.metadata["routing_decision"] = decision
     return state
 
 
-def route_decision(state: SharedContext) -> str:
+
+async def route_decision(state: SharedContext) -> str:
     """Use last RoutingDecision to choose the next node."""
     if state.status == "done" or state.turn >= MAX_TURNS:
         return END
 
     decision = state.metadata.get("routing_decision")
     if decision is None:
-        decision = _run(_orchestrator.route(state, _budget_mgr, _redis_pub))
+        decision = await _orchestrator.route(state, _budget_mgr, _redis_pub)
 
     # Prevent infinite loops in synthesis
-    if decision.next_agent.value == "synthesis" and state.has_agent_run(AgentID.SYNTHESIS):
+    has_synthesis_run = any(
+        e.agent_id == "synthesis"
+        for e in state.execution_events
+    )
+    if decision.next_agent.value == "synthesis" and has_synthesis_run:
         state.status = "done"
         return END
 
@@ -301,7 +298,7 @@ def route_decision(state: SharedContext) -> str:
     }
     node = agent_to_node.get(decision.next_agent.value)
     if node is None:
-        context.violations.append(PolicyViolation(
+        state.violations.append(PolicyViolation(
             agent_id="orchestrator",
             violation_type="invalid_routing_decision",
             details=f"LLM returned unknown agent: {decision.next_agent.value}",

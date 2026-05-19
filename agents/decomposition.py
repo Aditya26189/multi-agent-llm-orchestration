@@ -33,6 +33,8 @@ Example:
 
 
 class DecompositionAgent(BaseAgent):
+    def __init__(self):
+        super().__init__(agent_id="decomposition")
     async def run(
         self,
         context: SharedContext,

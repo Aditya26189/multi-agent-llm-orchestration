@@ -61,6 +61,8 @@ Return JSON with key "claim_scores" as an array. Each item must have:
 
 
 class CritiqueAgent(BaseAgent):
+    def __init__(self):
+        super().__init__(agent_id="critique")
     async def run(
         self,
         context: SharedContext,

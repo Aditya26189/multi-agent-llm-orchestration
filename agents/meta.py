@@ -74,6 +74,8 @@ class PromptRewrite(BaseModel):
 
 
 class MetaAgent(BaseAgent):
+    def __init__(self):
+        super().__init__(agent_id="meta")
     async def propose_rewrite(
         self,
         failure_cases: list,

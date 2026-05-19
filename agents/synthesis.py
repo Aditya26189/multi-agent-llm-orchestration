@@ -43,6 +43,8 @@ Resolution Log (JSON):
 
 
 class SynthesisAgent(BaseAgent):
+    def __init__(self):
+        super().__init__(agent_id="synthesis")
     async def run(
         self,
         context: SharedContext,
@@ -148,6 +150,7 @@ class SynthesisAgent(BaseAgent):
                     source_chunk_id=None,
                 ))
         context.provenance_map = new_provenance
+        context.clean_final_answer()
 
         await budget_mgr.consume("synthesis", full_response)
         context.add_event(

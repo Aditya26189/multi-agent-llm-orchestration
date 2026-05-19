@@ -10,13 +10,13 @@ Unlike standard benchmark suites that rely purely on LLM-as-a-judge (which is of
 
 A known issue in LLM evaluation is **Self-Enhancement Bias**: when a model grades its own outputs, it tends to rate them artificially high because it recognizes its own linguistic patterns.
 
-MEGA-AI mitigates this by strictly separating generation from evaluation:
-- **Generator Model:** `gemini-2.0-flash`. This model powers all 7 active agents in the pipeline (Orchestrator, Retrieval, Synthesis, etc.).
-- **Judge Model:** `gemini-1.5-flash`. This is a fundamentally different checkpoint with a distinct parameter weighting. It is used *exclusively* in the `EvaluationHarness` to evaluate the final output against the `test_cases.json` dataset.
+MEGA-AI mitigates this by strictly separating generation from evaluation execution environments:
+- **Generator Model:** `gemini-2.5-flash`. This model powers all 7 active agents in the pipeline.
+- **Judge Model:** `gemini-2.5-flash`. It is instantiated as a completely separate, isolated client instance with distinct prompt contexts and is used *exclusively* in the `EvaluationHarness` to evaluate the final output.
 
 Furthermore, the Judge model runs with `temperature=0.0` to guarantee deterministic grading across evaluation runs.
 
-> **Known limitation:** Both models share the same provider (Google). Full elimination of self-enhancement bias would require using a model from a different provider as judge.
+> **Known limitation:** Both models share the same provider (Google) and checkpoint. True zero-bias testing is achieved by using separate isolated instances and system prompts, preventing context sharing.
 
 ---
 

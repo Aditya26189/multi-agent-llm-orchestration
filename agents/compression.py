@@ -31,6 +31,8 @@ class CompressionFailed(Exception):
 
 
 class CompressionAgent(BaseAgent):
+    def __init__(self):
+        super().__init__(agent_id="compression")
     async def compress(
         self,
         agent_id: str,

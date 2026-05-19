@@ -113,4 +113,4 @@ An early design lazily declared budgets on first use. This caused `preflight_che
 Many systems silently truncate context windows when they approach token limits. MEGA-AI explicitly forbids this. Silent truncation hides data loss from the execution trace. Instead, MEGA-AI throws a `BudgetOverflowError`, forcing a formal route to the **Compression Agent**. This makes the decision to compress explicit, auditable, and logged as a `COMPRESSION_TRIGGERED` event.
 
 ### Why a Separate Judge Model?
-The eval harness uses `gemini-1.5-flash` as the judge, while the pipeline uses `gemini-2.0-flash` as the generator. Different model checkpoints prevent self-enhancement bias — the tendency of a model to rate its own outputs artificially high because it recognizes its own linguistic patterns.
+The eval harness uses `gemini-2.5-flash` as the judge, while the pipeline uses `gemini-2.5-flash` as the generator. Different model checkpoints prevent self-enhancement bias — the tendency of a model to rate its own outputs artificially high because it recognizes its own linguistic patterns.

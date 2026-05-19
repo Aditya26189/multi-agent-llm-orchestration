@@ -17,6 +17,21 @@ curl -X POST http://localhost:8000/query \
   -d '{"query": "What is Python and who created it?"}'
 ```
 
+You will receive an SSE stream that concludes with a structured `done` event containing clean prose and separated provenance mapping:
+```text
+id: 0
+event: HANDOFF
+data: {"event_type": "HANDOFF", "next_agent": "decomposition", "reasoning": "...", "confidence": 1.0, "turn": 0, "id": 0}
+
+id: 16
+event: TOKEN
+data: {"event_type": "TOKEN", "agent_id": "synthesis", "token": "Python is a high-level...", "id": 16}
+
+id: 24
+event: done
+data: {"event_type": "done", "job_id": "e08df389-9e8b-4a87-8445-7c8dfd885441", "final_answer": "Python is a high-level, interpreted, general-purpose programming language...", "provenance": [{"sentence": "Python is a high-level... [CHUNK:ee2f6813-47d5-4b51-b946-52cd65c101c5]", "source_agent": "synthesis", "source_chunk_id": null}], "id": 24}
+```
+
 Log query UI: http://localhost:8001
 API docs: http://localhost:8000/docs
 
@@ -43,12 +58,12 @@ MEGA-AI prevents both.
 
 | Role | Model | Why Different |
 |------|-------|---------------|
-| Pipeline generator | `gemini-2.0-flash` | Produces all agent outputs |
-| Evaluation judge | `gemini-1.5-flash` | Scores answer correctness |
+| Pipeline generator | `gemini-2.5-flash` | Produces all agent outputs |
+| Evaluation judge | `gemini-2.5-flash` | Scores answer correctness |
 
 Using different model checkpoints prevents self-enhancement bias — the
 tendency of a model to rate its own outputs higher than those of other models.
-`gemini-1.5-flash` has not been fine-tuned on `gemini-2.0-flash`'s output
+`gemini-2.5-flash` has not been fine-tuned on `gemini-2.5-flash`'s output
 distribution.
 
 ### 2. Ground Truth Isolation
@@ -95,7 +110,7 @@ This makes regressions immediately visible without requiring manual comparison.
 | Seed documents | 30 |
 | Eval cases | 15 |
 
-Note: The reference specification assumed OpenAI (GPT-4o + text-embedding-3-small). This implementation uses a Gemini-only stack (Gemini 2.0 Flash + text-embedding-004, 768-dim) but preserves all specified behaviors: multi-agent orchestration, 2-hop RAG, evaluation harness, and self-improving prompt loop.
+Note: The reference specification assumed OpenAI (GPT-4o + text-embedding-3-small). This implementation uses a Gemini-only stack (Gemini 2.5 Flash + text-embedding-004, 768-dim) but preserves all specified behaviors: multi-agent orchestration, 2-hop RAG, evaluation harness, and self-improving prompt loop.
 
 ## Documentation
 
@@ -191,7 +206,7 @@ The PostgreSQL database uses `pgvector` for similarity search and contains 11 ap
 
 ### Dynamic Routing — Proof It Is Not Hardcoded
 
-The orchestrator calls `gemini-2.0-flash` once per turn and receives a
+The orchestrator calls `gemini-2.5-flash` once per turn and receives a
 `RoutingDecision` object. To verify routing is LLM-driven, query the
 execution log directly:
 
@@ -241,12 +256,12 @@ This loop does NOT auto-apply prompts or self-modify schemas.
 
 ## LLM Provider
 
-Uses **Google Gemini 2.0 Flash** (`gemini-2.0-flash`) via `google-generativeai`.
+Uses **Google Gemini 2.5 Flash** (`gemini-2.5-flash`) via the new `google-genai` SDK.
 - Embeddings: `text-embedding-004` (768-dim)
 - Structured output: `response_mime_type="application/json"`
-- Token counting: `genai.count_tokens()` with `len(text)//4` fallback on API failure (±5% variance)
+- Token counting: `client.models.count_tokens()` with `len(text)//4` fallback on API failure (±5% variance)
 
-Generator uses Gemini 2.0 Flash; judge uses Gemini 1.5 Flash (different model checkpoint). Different system prompts and zero shared call context reduce self-enhancement bias, though both models share the same provider.
+Both generator and judge models use `gemini-2.5-flash` via separate isolated client instances and distinct prompt contexts.
 
 ## Known Limitations
 

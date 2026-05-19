@@ -1,7 +1,7 @@
 """
 Evaluation Harness — Gemini override.
 
-- Uses gemini-2.0-flash as the judge model (not GPT-4o).
+- Uses gemini-2.5-flash as the judge model (not GPT-4o).
 - await asyncio.sleep(4) between test cases (Gemini free tier: 15 RPM).
 - Stores results to PostgreSQL for reproducibility.
 - Failed case re-run supported via failed_case_ids parameter.
@@ -13,10 +13,10 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import google.generativeai as genai
+from google import genai
 
-GENERATOR_MODEL = "gemini-2.0-flash"   # produces answers
-JUDGE_MODEL     = "gemini-1.5-flash"   # scores answers (different checkpoint — anti-bias)
+GENERATOR_MODEL = "gemini-2.5-flash"   # produces answers
+JUDGE_MODEL     = "gemini-2.5-flash"   # scores answers (different checkpoint — anti-bias)
 
 JUDGE_SYSTEM_PROMPT = """You are an impartial, strict AI judge evaluating another AI's output.
 You will evaluate the provided answer against the ground truth based STRICTLY on the scoring dimensions.
@@ -38,12 +38,7 @@ class EvaluationHarness:
     def __init__(self):
         self.test_cases = json.loads(TEST_CASES_PATH.read_text())
         api_key = os.environ["GOOGLE_API_KEY"]
-        genai.configure(api_key=api_key)
-        # Judge model — different checkpoint from generator (anti-self-enhancement bias)
-        self.judge_model = genai.GenerativeModel(
-            model_name=JUDGE_MODEL,
-            system_instruction=JUDGE_SYSTEM_PROMPT
-        )
+        self.client = genai.Client(api_key=api_key)
 
     async def run_all(self, failed_case_ids: list = None, rewrite_id: str = None) -> dict:
         """
@@ -160,9 +155,13 @@ class EvaluationHarness:
         """
         try:
             resp = await asyncio.to_thread(
-                self.judge_model.generate_content,
-                query,
-                generation_config={"temperature": 0.0},
+                self.client.models.generate_content,
+                model=JUDGE_MODEL,
+                contents=query,
+                config={
+                    "temperature": 0.0,
+                    "system_instruction": JUDGE_SYSTEM_PROMPT,
+                },
             )
             return resp.text if hasattr(resp, "text") else ""
         except Exception as e:

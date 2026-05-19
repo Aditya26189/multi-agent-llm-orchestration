@@ -8,8 +8,9 @@ Emits BUDGET_UPDATE SSE events on every consume().
 Raises BudgetOverflowError on overflow — NEVER silently truncates.
 """
 import asyncio
+import os
 from typing import Dict, Optional, TYPE_CHECKING
-import google.generativeai as genai
+from google import genai
 from core.context import BudgetEntry, PolicyViolation, SharedContext, EventType
 
 if TYPE_CHECKING:
@@ -32,17 +33,17 @@ class ContextBudgetManager:
     Async-safe token budget manager.
     Tracks token usage per agent. Emits BUDGET_UPDATE SSE on every consume().
     Raises BudgetOverflowError on overflow — NEVER silently truncates.
-    Uses genai.GenerativeModel.count_tokens().
+    Uses genai.Client.models.count_tokens().
     """
 
     DEFAULT_BUDGETS: Dict[str, int] = {
-        "orchestrator":  2048,
-        "decomposition": 3072,
-        "retrieval":     6144,
-        "critique":      4096,
-        "synthesis":     4096,
+        "orchestrator":  8192,
+        "decomposition": 8192,
+        "retrieval":     8192,
+        "critique":      8192,
+        "synthesis":     8192,
         "compression":   8192,
-        "meta":          4096,
+        "meta":          8192,
     }
 
     def __init__(
@@ -53,13 +54,18 @@ class ContextBudgetManager:
         self._context = context
         self._redis_pub = redis_pub
         self._lock = asyncio.Lock()  # MUST be asyncio.Lock, never threading.Lock
-        self._model = genai.GenerativeModel("gemini-2.0-flash")
+        api_key = os.environ.get("GOOGLE_API_KEY_META") or os.environ.get("GOOGLE_API_KEY") or "NOT_FOUND"
+        self._client = genai.Client(api_key=api_key)
 
     def _count(self, text_or_tokens: "str | int") -> int:
         """Token count using genai."""
         if isinstance(text_or_tokens, str):
             try:
-                return max(1, self._model.count_tokens(text_or_tokens).total_tokens)
+                resp = self._client.models.count_tokens(
+                    model="gemini-2.5-flash",
+                    contents=text_or_tokens,
+                )
+                return max(1, resp.total_tokens)
             except Exception:
                 return max(1, len(text_or_tokens) // 4)
         return text_or_tokens

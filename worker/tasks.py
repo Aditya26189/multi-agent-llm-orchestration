@@ -59,13 +59,8 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
     context = SharedContext(job_id=job_id, query=query, status=JobStatus.RUNNING)
     budget_mgr = ContextBudgetManager(context, redis_pub)
 
-    budget_mgr.declare_budget("orchestrator",  2048)
-    budget_mgr.declare_budget("decomposition", 3072)
-    budget_mgr.declare_budget("retrieval",     6144)
-    budget_mgr.declare_budget("critique",      4096)
-    budget_mgr.declare_budget("synthesis",     4096)
-    budget_mgr.declare_budget("compression",   8192)
-    budget_mgr.declare_budget("meta",          4096)
+    for agent_id, budget in ContextBudgetManager.DEFAULT_BUDGETS.items():
+        budget_mgr.declare_budget(agent_id, budget)
 
     orchestrator = Orchestrator()
     compression_agent = CompressionAgent()
@@ -92,7 +87,8 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
             )
             
             # Run LangGraph pipeline synchronously as required by Celery context
-            final_state = await pipeline.ainvoke(context)
+            final_dict = await pipeline.ainvoke(context)
+            final_state = SharedContext(**final_dict)
 
             # Auto-trigger compression if any agent near budget limit
             for agent_id, entry in budget_mgr.get_registry().items():
@@ -135,11 +131,17 @@ async def _run_pipeline_async(query: str, job_id: str) -> dict:
                             if len(task.description) > 200:
                                 task.description = task.description[:200] + "..."
 
-            # ── PIPELINE COMPLETE ──────────────────────────────────────────────
             if final_state.status != JobStatus.DONE:
                 final_state.status = JobStatus.DONE
 
-            await redis_pub.publish_done(final_state.job_id, final_state.final_answer)
+            # Clean final answer of any remaining markers (e.g. if Synthesis was bypassed)
+            final_state.clean_final_answer()
+
+            await redis_pub.publish_done(
+                final_state.job_id,
+                final_state.final_answer,
+                provenance=[pe.model_dump(mode="json") for pe in final_state.provenance_map]
+            )
 
             # Persist to DB
             await _save_context_to_db(final_state)
@@ -203,7 +205,7 @@ async def _save_context_to_db(context: SharedContext) -> None:
             "s": context.status.value,
             "tok": sum(e.token_count for e in context.execution_events),
             "cost": total_cost,
-            "model": "gemini-2.0-flash",
+            "model": "gemini-2.5-flash",
         })
 
         # Insert execution events

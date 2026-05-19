@@ -46,17 +46,21 @@ Note: Keep-alive ping events are not currently enabled. Reconnect via GET /jobs/
 
 **Example SSE Trace:**
 ```text
-event: AGENT_START
-data: {"agent_id": "orchestrator", "job_id": "8fbe4a54-..."}
-
-event: HANDOFF
-data: {"next_agent": "decomposition", "reasoning": "Needs sub-tasks", "confidence": 0.98}
-
+id: 0
 event: BUDGET_UPDATE
-data: {"agent_id": "orchestrator", "used": 542, "remaining": 2530}
+data: {"event_type": "BUDGET_UPDATE", "agent_id": "orchestrator", "used_tokens": 473, "max_tokens": 8192, "remaining_tokens": 7719, "pct_used": 5.8, "id": 0}
 
-event: DONE
-data: {"final_answer": "Paris is the capital of France."}
+id: 0
+event: HANDOFF
+data: {"event_type": "HANDOFF", "next_agent": "decomposition", "reasoning": "...", "confidence": 1.0, "turn": 0, "id": 0}
+
+id: 16
+event: TOKEN
+data: {"event_type": "TOKEN", "agent_id": "synthesis", "token": "Python is a high-level, interpreted, general-purpose programming language", "id": 16}
+
+id: 24
+event: done
+data: {"event_type": "done", "job_id": "e08df389-9e8b-4a87-8445-7c8dfd885441", "final_answer": "Python is a high-level, interpreted, general-purpose programming language...", "provenance": [{"sentence": "Python is a high-level... [CHUNK:ee2f6813-47d5-4b51-b946-52cd65c101c5]", "source_agent": "synthesis", "source_chunk_id": null}], "id": 24}
 ```
 
 ### Error Response Format
@@ -135,7 +139,7 @@ curl -X GET "http://localhost:8000/eval/latest"
   "run_id": "a1b2c3d4-...",
   "total_score": 0.83,
   "finished_at": "2026-05-08T21:00:00Z",
-  "model_used": "gemini-2.0-flash",
+  "model_used": "gemini-2.5-flash",
   "results": [
     {
       "test_case_id": "tc_01",

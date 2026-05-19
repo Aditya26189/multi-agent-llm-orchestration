@@ -24,11 +24,14 @@ class RedisPublisher:
         self._seq = 0
 
     async def connect(self):
-        self._client = aioredis.from_url(self._url, decode_responses=True)
+        self._pool = aioredis.ConnectionPool.from_url(self._url, decode_responses=True)
+        self._client = aioredis.Redis(connection_pool=self._pool)
 
     async def disconnect(self):
         if self._client:
             await self._client.aclose()
+        if hasattr(self, "_pool") and self._pool:
+            await self._pool.disconnect()
 
     async def publish(self, job_id: str, event_data: dict) -> None:
         if not self._client:
@@ -46,11 +49,12 @@ class RedisPublisher:
             "token": token,
         })
 
-    async def publish_done(self, job_id: str, final_answer: str) -> None:
+    async def publish_done(self, job_id: str, final_answer: str, provenance: Optional[list] = None) -> None:
         await self.publish(job_id, {
             "event_type": EventType.DONE.value,
             "job_id": job_id,
             "final_answer": final_answer,
+            "provenance": provenance or [],
         })
 
     async def publish_error(self, job_id: str, message: str) -> None:

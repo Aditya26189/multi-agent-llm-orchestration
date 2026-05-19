@@ -239,13 +239,17 @@ Query: {natural_language_query}
 Return ONLY the SQL. No markdown, no explanation."""
 
         if gemini_model is None:
-            import google.generativeai as genai
+            from google import genai
             import os
-            genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-            gemini_model = genai.GenerativeModel("gemini-2.0-flash")
+            api_key = os.environ.get("GOOGLE_API_KEY_TOOLS") or os.environ.get("GOOGLE_API_KEY")
+            gemini_model = genai.Client(api_key=api_key)
 
-        resp = await asyncio.to_thread(gemini_model.generate_content, prompt)
-        sql = resp.text.strip().strip("```sql").strip("```").strip()
+        resp = await asyncio.to_thread(
+            gemini_model.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        sql = resp.text.strip().strip("```sql").strip("```").strip() if hasattr(resp, "text") else ""
 
         if not sql.upper().startswith("SELECT"):
             return ToolResult(
@@ -320,10 +324,10 @@ async def tool_self_reflect(
 
     try:
         if gemini_model is None:
-            import google.generativeai as genai
+            from google import genai
             import os
-            genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-            gemini_model = genai.GenerativeModel("gemini-2.0-flash")
+            api_key = os.environ.get("GOOGLE_API_KEY_TOOLS") or os.environ.get("GOOGLE_API_KEY")
+            gemini_model = genai.Client(api_key=api_key)
 
         outputs_text = "\n\n---\n\n".join(
             f"[Output {i+1}]:\n{o}" for i, o in enumerate(prior_outputs)
@@ -339,8 +343,12 @@ List EACH contradiction:
 
 If none found, respond: NO_CONTRADICTIONS_FOUND"""
 
-        resp = await asyncio.to_thread(gemini_model.generate_content, prompt)
-        reflection = resp.text.strip()
+        resp = await asyncio.to_thread(
+            gemini_model.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        reflection = resp.text.strip() if hasattr(resp, "text") else ""
 
         return ToolResult(
             success=True,

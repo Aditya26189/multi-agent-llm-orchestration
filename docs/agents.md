@@ -98,7 +98,7 @@ MEGA-AI implements a highly secure, parallel-safe budget tracking system. Budget
 
 ## Testing with MOCK_LLM
 
-For local testing without consuming Gemini API quota, set `MOCK_LLM=true` in the environment. This patches all Gemini clients (`google.generativeai` and `google.genai`) to return a deterministic fixed response, allowing the full pipeline execution path to be exercised end-to-end.
+For local testing without consuming Gemini API quota, set `MOCK_LLM=true` in the environment. This patches the Gemini client (`google.genai`) to return a deterministic fixed response, allowing the full pipeline execution path to be exercised end-to-end.
 
 ```bash
 MOCK_LLM=true docker compose exec api pytest tests/ -v

@@ -1,12 +1,12 @@
 """Token-to-USD cost calculation based on Gemini published pricing."""
 
 # Official Gemini Flash rates (per token, USD)
-INPUT_COST_PER_TOKEN  = 0.000_000_075   # gemini-2.0-flash input
-OUTPUT_COST_PER_TOKEN = 0.000_000_30    # gemini-2.0-flash output
+INPUT_COST_PER_TOKEN  = 0.000_000_075   # gemini-2.5-flash input
+OUTPUT_COST_PER_TOKEN = 0.000_000_30    # gemini-2.5-flash output
 
 GEMINI_PRICING = {
-    "gemini-2.0-flash": {"input": INPUT_COST_PER_TOKEN,  "output": OUTPUT_COST_PER_TOKEN},
-    "gemini-1.5-flash": {"input": 0.000_000_075, "output": 0.000_000_30},
+    "gemini-2.5-flash": {"input": INPUT_COST_PER_TOKEN,  "output": OUTPUT_COST_PER_TOKEN},
+    "gemini-2.5-flash": {"input": 0.000_000_075, "output": 0.000_000_30},
 }
 
 

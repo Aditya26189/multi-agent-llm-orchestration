@@ -245,6 +245,14 @@ class SharedContext(BaseModel):
             if d.confidence >= 0.4
         )
 
+    def clean_final_answer(self) -> None:
+        """Strip [CHUNK:...] and [REASONING] markers from final_answer."""
+        import re
+        text = self.final_answer
+        cleaned = re.sub(r'\[CHUNK:[^\]]+\]\s*', '', text)
+        cleaned = re.sub(r'\[REASONING\]\s*', '', cleaned)
+        self.final_answer = cleaned.strip()
+
     def snapshot(self) -> Dict[str, Any]:
         return self.model_dump(mode="json")
 
@@ -277,7 +285,7 @@ class SharedContext(BaseModel):
             output_hash=oh,
             latency_ms=latency_ms,
             token_count=token_count,
-            model_used="gemini-2.0-flash",
+            model_used="gemini-2.5-flash",
             input_token_count=token_count,
             output_token_count=0,
             policy_violation=policy_violation,

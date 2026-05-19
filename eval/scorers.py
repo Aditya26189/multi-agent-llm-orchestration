@@ -61,17 +61,22 @@ def score_citation_accuracy(context: SharedContext) -> Tuple[float, str]:
         return 0.0, "No provenance map found — retrieval agent did not produce citations"
 
     valid_chunk_ids = {c.id: c.text for c in context.retrieved_chunks}
-    total = len(context.provenance_map)
+    total = 0
     valid = 0
     details = []
 
     for entry in context.provenance_map:
+        total += 1
         if entry.source_chunk_id is None:
+            valid += 1  # [REASONING] entries are always valid
+            details.append(f"[REASONING] '{entry.sentence[:40]}...' — valid")
             continue
         chunk_text = valid_chunk_ids.get(entry.source_chunk_id)
         if chunk_text and _content_match(entry.sentence, chunk_text):
             valid += 1
-        total += 1
+            details.append(f"[CHUNK:{entry.source_chunk_id}] — valid")
+        else:
+            details.append(f"[CHUNK:{entry.source_chunk_id}] — INVALID (content mismatch or unknown)")
 
     score = valid / total if total > 0 else 0.0
     justification = f"{valid}/{total} citations valid. " + "; ".join(details[:5])

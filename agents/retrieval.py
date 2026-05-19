@@ -64,18 +64,18 @@ LIMIT :limit
 
 class RetrievalAgent(BaseAgent):
     def __init__(self):
-        super().__init__()
+        super().__init__(agent_id="retrieval")
         self._db_url = os.environ["DATABASE_URL"]
-        from db.session import AsyncSessionLocal
-        self._session_factory = AsyncSessionLocal
-        self._client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+        # self._client is already initialized by BaseAgent with the correct API key
 
     async def _embed(self, text: str) -> List[float]:
         """Gemini embedding model with retrieval_query task type."""
+        from core.rate_limiter import call_with_backoff
+        self._log_api_call("embed_content")
         client = self._client
-        result = await asyncio.to_thread(
+        result = await call_with_backoff(
             client.models.embed_content,
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-001",
             contents=text,
             config=types.EmbedContentConfig(
                 task_type="RETRIEVAL_QUERY",
@@ -95,9 +95,20 @@ class RetrievalAgent(BaseAgent):
             ORDER BY embedding <=> '{emb_literal}'::vector(768)
             LIMIT :limit
         """
-        async with self._session_factory() as db:
-            rows = await db.execute(text(sql), {"limit": limit})
-            result = rows.fetchall()
+        
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from sqlalchemy.pool import NullPool
+        
+        # Create an isolated engine with NullPool per call to prevent asyncpg InterfaceErrors
+        # when running across multiple Celery worker event loops.
+        engine = create_async_engine(self._db_url, poolclass=NullPool)
+        
+        try:
+            async with AsyncSession(engine) as db:
+                rows = await db.execute(text(sql), {"limit": limit})
+                result = rows.fetchall()
+        finally:
+            await engine.dispose()
 
         return [
             Chunk(
@@ -113,13 +124,8 @@ class RetrievalAgent(BaseAgent):
     async def _formulate_followup(self, query: str, chunks: list) -> str:
         """LLM determines missing information and formulates 2nd hop query."""
         prompt = f"Query: {query}\nFound so far: {[c.text[:200] for c in chunks]}\nWhat is missing? Return ONLY the search query."
-        client = self._client
-        res = await asyncio.to_thread(
-            client.models.generate_content,
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
-        return res.text.strip() if hasattr(res, "text") else query
+        res = await self.generate(prompt)
+        return res.strip() if res else query
 
     async def run(
         self,
@@ -174,29 +180,13 @@ class RetrievalAgent(BaseAgent):
         await budget_mgr.consume("retrieval", prompt_hop2)
 
         # ── HOP 2 — with token streaming ────────────────────────────────────────────
-        from core.rate_limiter import wait as rate_wait
-        await rate_wait()
-        client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-        response_stream = await asyncio.to_thread(
-            client.models.generate_content_stream,
-            model="gemini-2.0-flash",
-            contents=prompt_hop2,
+        hop2_response = await self.stream_response(
+            prompt_hop2,
+            context,
+            redis_pub,
+            "retrieval",
             config=types.GenerateContentConfig(temperature=0.0),
         )
-
-        hop2_text = ""
-        for chunk in response_stream:
-            token_text = chunk.text if hasattr(chunk, "text") and chunk.text else ""
-            if token_text:
-                hop2_text += token_text
-                # Publish TOKEN event to Redis → SSE client sees retrieval streaming
-                if redis_pub is not None:
-                    await redis_pub.publish(context.job_id, {
-                        "event_type": "TOKEN",
-                        "agent_id": "retrieval",
-                        "token": token_text,
-                    })
-        hop2_response = hop2_text
         latency = (time.monotonic() - start) * 1000
 
         # ── Parse citations into provenance_map ────────────────────────────────
