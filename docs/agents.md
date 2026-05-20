@@ -57,12 +57,14 @@ Takes the flagged claims from Critique and the raw data from Retrieval to draft 
 
 ---
 
-## 6. Compression Agent
-**Budget:** 8,192 Tokens | **Role:** Token Mitigation
+## 6. ToolRunner Agent
+**Role:** Tool Dispatch & Retry Strategy
 
-This agent is rarely invoked by the Orchestrator directly. Instead, it is automatically triggered by the worker loop if any agent hits **80%** of its token budget.
-- **Lossless vs Lossy:** It applies structured lossless compression to critical metadata (keeping JSON structures and UUIDs perfectly intact) and lossy compression to conversational filler.
-- **Auditable:** It emits a `COMPRESSION_TRIGGERED` SSE event to the client so the user knows context was truncated.
+The ToolRunner agent is the 6th agent in the LangGraph pipeline. It decides which tool to call and manages the retry strategy (3 attempts max per tool). All tool calls are logged to the `tool_calls` table with inputs, outputs, errors, and retry count.
+- **Tool Dispatch:** Decides and dispatches web search, database lookup (NL-to-SQL), code execution, and self-reflection.
+- **Retry Strategy:** Manages tool execution failures (up to 3 total attempts per tool).
+- **Traceability:** Logs inputs, outputs, errors, and retry count for every attempt in the `tool_calls` table.
+- **Note:** Was unwired in early versions. Connected to the graph in the final commit.
 
 ---
 
@@ -75,9 +77,22 @@ Runs asynchronously after evaluation failures. It analyzes the pipeline trace to
 
 ---
 
+## Compression (Budget Overflow Handler)
+**Role:** Token Mitigation (Not a LangGraph node)
+
+Compression operates as a conditionally triggered utility rather than a LangGraph graph node.
+- **Trigger Condition:** Triggered conditionally by Synthesis or the pipeline executor when context exceeds the 80% token budget threshold of any agent.
+- **Operation:** Operates directly on the context/answer text via `compress()`. The budget-threshold trigger in `run()` is not reached during normal pipeline execution — only activates under budget pressure.
+- **Lossless vs Lossy:** It applies structured lossless compression to critical metadata (keeping JSON structures and UUIDs perfectly intact) and lossy compression to conversational filler.
+- **Auditable:** It emits a `COMPRESSION_TRIGGERED` SSE event to the client so the user knows context was compressed.
+
+---
+
 ## The Context Budget Manager
 
-MEGA-AI implements a highly secure, parallel-safe budget tracking system. Budgets are declared **explicitly at pipeline startup** in `worker/tasks.py` before any agent executes:
+MEGA-AI implements a highly secure, parallel-safe budget tracking system. Budgets are declared **explicitly at pipeline startup** in `worker/tasks.py` before any agent executes.
+
+Token budgets are tracked for LLM-driven agents:
 
 | Agent | Max Tokens |
 |---|---|
@@ -88,6 +103,8 @@ MEGA-AI implements a highly secure, parallel-safe budget tracking system. Budget
 | `synthesis` | 4,096 |
 | `compression` | 8,192 |
 | `meta` | 4,096 |
+
+*Note: ToolRunner does not have a token budget since it executes deterministic tool code and doesn't run direct LLM generations itself (its actions are constrained by tool attempt limits instead).*
 
 - **Tokenizer:** It uses `genai.count_tokens()` with a `len(text)//4` fallback on API failure (±5% variance) to calculate Gemini token consumption.
 - **Pre-flight Check:** Before executing any agent, `preflight_check(agent_id, text)` is called. If the estimated token addition would overflow the remaining budget, the agent is skipped and a `PolicyViolation` is logged.

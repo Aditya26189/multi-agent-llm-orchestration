@@ -32,7 +32,8 @@ graph TB
         R["Retrieval\n2-hop pgvector + [CHUNK:id] citations"]
         C["Critique\nper-span ClaimScore + flagging"]
         S["Synthesis\nRESOLVE/REMOVE/HEDGE + provenance"]
-        Comp["Compression\nlossless structured, lossy filler"]
+        TR["ToolRunner\ntool dispatch + retry strategy"]
+        Comp["Compression\nbudget overflow handler (not a graph node)"]
         M["Meta\nPromptRewrite + difflib diff → DB"]
     end
 
@@ -42,7 +43,8 @@ graph TB
     SC -->|next_agent| R
     SC -->|next_agent| C
     SC -->|next_agent| S
-    SC -->|budget >80%| Comp
+    SC -->|next_agent| TR
+    S -->|budget overflow| Comp
     SC -->|eval failures| M
 ```
 
@@ -81,6 +83,18 @@ A lightweight Flask application on port 8001.
 - **Data Source:** Queries the PostgreSQL `execution_events`, `routing_decisions`, `tool_calls`, and `prompt_rewrites` tables directly.
 - **Endpoints exposed here** (not on port 8000): `GET /rewrites`, `GET /eval/compare`, `GET /trace`.
 
+### ToolRunner
+The 6th agent in the LangGraph pipeline. Decides which tool to call and manages
+retry strategy (3 attempts max per tool). All tool calls are logged to the
+`tool_calls` table with inputs, outputs, errors, and retry count.
+Note: Was unwired in early versions. Connected to the graph in final commit.
+
+### Compression (Budget Overflow Handler)
+Not a LangGraph graph node. Triggered conditionally by Synthesis when context
+exceeds the token budget threshold. Operates directly on `final_answer` via
+`compress()`. The budget-threshold trigger in `run()` is not reached during
+normal pipeline execution — only activates under budget pressure.
+
 ---
 
 ## 3. The Execution Data Flow
@@ -110,7 +124,7 @@ Because the Decomposition agent can create parallel subtasks that execute concur
 An early design lazily declared budgets on first use. This caused `preflight_check()` to raise `KeyError` for agents that hadn't yet been called. All budgets are now declared at `_run_pipeline_async` startup — before the LangGraph pipeline runs — so the budget registry is always complete regardless of which agent the Orchestrator routes to first.
 
 ### Why NEVER Silently Truncate?
-Many systems silently truncate context windows when they approach token limits. MEGA-AI explicitly forbids this. Silent truncation hides data loss from the execution trace. Instead, MEGA-AI throws a `BudgetOverflowError`, forcing a formal route to the **Compression Agent**. This makes the decision to compress explicit, auditable, and logged as a `COMPRESSION_TRIGGERED` event.
+Many systems silently truncate context windows when they approach token limits. MEGA-AI explicitly forbids this. Silent truncation hides data loss from the execution trace. Instead, MEGA-AI throws a `BudgetOverflowError`, forcing a formal trigger of the **Compression** utility (Budget Overflow Handler). This makes the decision to compress explicit, auditable, and logged as a `COMPRESSION_TRIGGERED` event.
 
 ### Why a Separate Judge Model?
 The eval harness uses `gemini-2.5-flash` as the judge, while the pipeline uses `gemini-2.5-flash` as the generator. Different model checkpoints prevent self-enhancement bias — the tendency of a model to rate its own outputs artificially high because it recognizes its own linguistic patterns.

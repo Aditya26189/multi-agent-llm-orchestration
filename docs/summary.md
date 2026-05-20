@@ -5,7 +5,7 @@ This guide is designed to help you explain the **MEGA-AI** project. It covers th
 ---
 
 ## 1. The 30-Second Elevator Pitch
-> *"MEGA-AI is a production-grade, asynchronous multi-agent orchestration system built to solve complex research and retrieval tasks. Instead of using a rigid, sequential RAG pipeline, it uses an LLM-driven StateGraph orchestrator to dynamically route queries between 7 specialized agents (Decomposition, Retrieval, Critique, Synthesis, Compression, Meta, and Tool Runner) sharing a centralized state blackboard. It is fully asynchronous, powered by Celery, Redis, and PostgreSQL with pgvector, and features strict token budget enforcement, round-robin API key rotation, and a self-improving prompt optimization loop."*
+> *"MEGA-AI is a production-grade, asynchronous multi-agent orchestration system built to solve complex research and retrieval tasks. Instead of using a rigid, sequential RAG pipeline, it uses an LLM-driven StateGraph orchestrator to dynamically route queries between 7 specialized agents (Orchestrator, Decomposition, Retrieval, Critique, Synthesis, ToolRunner, and Meta) sharing a centralized state blackboard. It is fully asynchronous, powered by Celery, Redis, and PostgreSQL with pgvector, and features strict token budget enforcement, round-robin API key rotation, and a self-improving prompt optimization loop."*
 
 ---
 
@@ -39,7 +39,7 @@ Interviewers love hearing about hard bugs you debugged and resolved. Here are th
 * **The Solution:** 
   * You implemented a `ContextBudgetManager` that tracks tokens consumed by each agent.
   * It protects the budget registry using an `asyncio.Lock` to prevent race conditions during concurrent subtask executions.
-  * Instead of silently truncating (which hides details from audit logs), it raises a `BudgetOverflowError` and logs a `policy_violations` event, automatically routing the state to the **Compression Agent** to perform structured lossless/lossy compression.
+  * Instead of silently truncating (which hides details from audit logs), it raises a `BudgetOverflowError` and logs a `policy_violations` event, automatically triggering the **Compression** utility (Budget Overflow Handler) to perform structured lossless/lossy compression.
 
 ### Challenge C: Gemini API Rate-Limiting & Overload Resilience
 * **The Problem:** The Gemini API free tier enforces a strict 15 Requests Per Minute (RPM) limit. Running evaluation harnesses or high-concurrency requests quickly resulted in `429 Resource Exhausted` or `503 Service Overloaded` errors.
